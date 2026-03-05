@@ -168,13 +168,25 @@ MENU
 }
 
 run_main_menu() {
-  if [[ -x "$MAIN_MENU_SCRIPT" ]]; then
-    "$MAIN_MENU_SCRIPT"
-  elif [[ -f "$MAIN_MENU_SCRIPT" ]]; then
-    bash "$MAIN_MENU_SCRIPT"
-  else
-    echo "[WARN] Main menu script not found: $MAIN_MENU_SCRIPT"
+  local exit_code=0
+
+  (
+    if [[ -x "$MAIN_MENU_SCRIPT" ]]; then
+      "$MAIN_MENU_SCRIPT"
+    elif [[ -f "$MAIN_MENU_SCRIPT" ]]; then
+      bash "$MAIN_MENU_SCRIPT"
+    else
+      echo "[WARN] Main menu script not found: $MAIN_MENU_SCRIPT"
+      exit 1
+    fi
+  )
+  exit_code=$?
+
+  if [[ $exit_code -ne 0 && $exit_code -ne 130 ]]; then
+    echo "[INFO] Main menu exited with code: $exit_code"
   fi
+
+  return 0
 }
 
 main() {
@@ -204,7 +216,7 @@ MENU
         cleanup_menu
         ;;
       4)
-        run_main_menu || true
+        run_main_menu
         read -r -p "Press Enter to continue..." _
         ;;
       0)
