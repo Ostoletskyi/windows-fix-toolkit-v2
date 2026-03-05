@@ -11,12 +11,11 @@ if [[ ! -f "$ENTRYPOINT" ]]; then
 fi
 
 pick_powershell() {
-  # Prefer pwsh (PowerShell 7) because it is consistent in Git Bash environments
+  # Prefer pwsh in Git Bash env
   if command -v pwsh >/dev/null 2>&1; then
     echo "pwsh"
     return 0
   fi
-  # Windows PowerShell
   if command -v powershell.exe >/dev/null 2>&1; then
     echo "powershell.exe"
     return 0
@@ -47,9 +46,7 @@ HDR
   echo
 }
 
-pause() {
-  read -r -p "Press Enter to continue..." _
-}
+pause() { read -r -p "Press Enter to continue..." _; }
 
 ask_common_flags() {
   local flags=()
@@ -73,8 +70,7 @@ ask_common_flags() {
 }
 
 run_toolkit() {
-  local mode="$1"
-  shift
+  local mode="$1"; shift
   local extra=("$@")
 
   local cmd=(
@@ -94,7 +90,7 @@ run_toolkit() {
   echo "[RUN] ${cmd[*]}"
   echo "────────────────────────────────────────────────────────────────────"
 
-  # IMPORTANT: with set -e, we must capture exit code without aborting script
+  # Capture exit code without aborting bash (set -e)
   set +e
   "${cmd[@]}"
   local exit_code=$?
@@ -131,41 +127,19 @@ main_menu() {
 
     read -r -p "Select option [0-6]: " choice
     case "${choice:-}" in
-      1)
-        mapfile -t flags < <(ask_common_flags || true)
-        run_toolkit "SelfTest" "${flags[@]:-}"
-        ;;
-      2)
-        mapfile -t flags < <(ask_common_flags || true)
-        run_toolkit "Diagnose" "${flags[@]:-}"
-        ;;
-      3)
-        mapfile -t flags < <(ask_common_flags || true)
-        run_toolkit "Repair" "${flags[@]:-}"
-        ;;
-      4)
-        mapfile -t flags < <(ask_common_flags || true)
-        run_toolkit "Full" "${flags[@]:-}"
-        ;;
-      5)
-        mapfile -t flags < <(ask_common_flags || true)
-        run_toolkit "DryRun" "${flags[@]:-}"
-        ;;
+      1) mapfile -t flags < <(ask_common_flags || true); run_toolkit "SelfTest" "${flags[@]:-}" ;;
+      2) mapfile -t flags < <(ask_common_flags || true); run_toolkit "Diagnose" "${flags[@]:-}" ;;
+      3) mapfile -t flags < <(ask_common_flags || true); run_toolkit "Repair" "${flags[@]:-}" ;;
+      4) mapfile -t flags < <(ask_common_flags || true); run_toolkit "Full" "${flags[@]:-}" ;;
+      5) mapfile -t flags < <(ask_common_flags || true); run_toolkit "DryRun" "${flags[@]:-}" ;;
       6)
-        echo
-        read -r -p "Enter Mode (SelfTest/Diagnose/Repair/Full/DryRun): " mode
-        mapfile -t flags < <(ask_common_flags || true)
-        run_toolkit "$mode" "${flags[@]:-}"
-        ;;
-      0)
-        echo "Bye 👋"
-        exit 0
-        ;;
-      *)
-        echo
-        echo "[WARN] Invalid choice: ${choice:-<empty>}"
-        pause
-        ;;
+         echo
+         read -r -p "Enter Mode (SelfTest/Diagnose/Repair/Full/DryRun): " mode
+         mapfile -t flags < <(ask_common_flags || true)
+         run_toolkit "$mode" "${flags[@]:-}"
+         ;;
+      0) echo "Bye 👋"; exit 0 ;;
+      *) echo; echo "[WARN] Invalid choice: ${choice:-<empty>}"; pause ;;
     esac
   done
 }
