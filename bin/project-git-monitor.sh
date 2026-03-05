@@ -12,17 +12,54 @@ fi
 
 cd "$REPO_ROOT"
 
-#------------------------------------------------------------------------------
-# Utilities
-#------------------------------------------------------------------------------
-safe_clear() {
-  clear 2>/dev/null || printf '\033[2J\033[H'
+# ---------- helpers ----------
+pause() { read -r -p "Press Enter to continue..." _; }
+
+clear_screen() {
+  if command -v clear >/dev/null 2>&1; then
+    clear || true
+  else
+    # ANSI fallback
+    printf '\033[2J\033[H' || true
+  fi
+}
+
+trim() {
+  # trim leading/trailing whitespace
+  local s="${1:-}"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+current_branch() {
+  git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown"
+}
+
+current_upstream() {
+  # prints upstream ref or empty string if none
+  git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true
+}
+
+is_dirty() {
+  [[ -n "$(git status --porcelain 2>/dev/null)" ]]
+}
+
+git_try_fetch() {
+  echo "[INFO] Fetching remote updates..."
+  if ! git fetch --all --prune; then
+    echo "[ERROR] git fetch failed (network/auth issue?)."
+    echo "[HINT] Check: network, VPN/proxy, GitHub access, credentials."
+    return 1
+  fi
+  return 0
 }
 
 print_status() {
   local branch upstream ahead behind dirty
-  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'unknown')"
-  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo 'no-upstream')"
+  branch="$(current_branch)"
+  upstream="$(current_upstream)"
+  [[ -z "${upstream:-}" ]] && upstream="no-upstream"
 
   if [[ "$upstream" != "no-upstream" ]]; then
     ahead="$(git rev-list --count "${upstream}..HEAD" 2>/dev/null || echo 0)"
@@ -32,11 +69,8 @@ print_status() {
     behind="0"
   fi
 
-  if [[ -n "$(git status --porcelain)" ]]; then
-    dirty="yes"
-  else
-    dirty="no"
-  fi
+  dirty="no"
+  is_dirty && dirty="yes"
 
   cat <<STATUS
 ----------------------------------------
@@ -49,272 +83,296 @@ print_status() {
 STATUS
 }
 
-#------------------------------------------------------------------------------
-# Command: Pull
-#------------------------------------------------------------------------------
+# ---------- commands ----------
 cmd_pull() {
-  echo "[INFO] Fetching remote updates..."
-  
-  # FIX: Handle fetch errors gracefully
-  if ! git fetch --all --prune; then
-    echo "[ERROR] Failed to fetch from remote. Check network connection."
-    return 1
+  # Do not die on fetch/pull errors under set -e
+  set +e
+  git_try_fetch
+  local fetch_ec=$?
+  set -e
+  if [[ $fetch_ec -ne 0 ]]; then
+    echo "[WARN] Pull not performed because fetch failed."
+    return 0
   fi
 
-  local upstream
-  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  local upstream branch
+  branch="$(current_branch)"
+  upstream="$(current_upstream)"
 
   if [[ -z "${upstream:-}" ]]; then
-    echo "[WARN] No upstream tracking branch configured for current branch."
-    echo "[HINT] Configure with: git branch --set-upstream-to origin/$(git rev-parse --abbrev-ref HEAD)"
-    echo "[INFO] Pull aborted - no upstream configured."
-    return 1
+    echo "[WARN] No upstream tracking branch configured for '$branch'."
+    echo "[WHAT THIS MEANS] You cannot pull automatically because git doesn't know remote branch."
+    echo "[FIX] Run:"
+    echo "  git branch --set-upstream-to origin/$branch $branch"
+    echo
+    echo "[INFO] No changes pulled."
+    return 0
   fi
 
-  echo "[INFO] Pulling from $upstream ..."
-  
-  # FIX: Handle non-fast-forward scenarios
-  if ! git pull --ff-only; then
-    echo ""
-    echo "[ERROR] Fast-forward pull failed (local and remote have diverged)."
-    echo ""
-    echo "Options:"
-    echo "  1. Rebase: git pull --rebase"
-    echo "  2. Merge:  git pull --no-ff"
-    echo "  3. Reset:  Use cleanup menu option 2"
-    echo ""
-    read -r -p "Attempt rebase now? (y/N): " ans
-    if [[ "${ans,,}" == "y" ]]; then
-      if git pull --rebase; then
-        echo "[OK] Rebase successful."
-      else
-        echo "[ERROR] Rebase failed. Resolve conflicts manually."
-        return 1
-      fi
-    else
-      echo "[INFO] Pull aborted. Resolve manually."
-      return 1
-    fi
+  echo "[INFO] Pulling from $upstream (fast-forward only)..."
+
+  set +e
+  git pull --ff-only
+  local pull_ec=$?
+  set -e
+
+  if [[ $pull_ec -eq 0 ]]; then
+    echo "[OK] Pull completed (fast-forward)."
+    return 0
   fi
-  
-  echo "[OK] Pull completed."
+
+  echo "[WARN] Fast-forward not possible (branches diverged) OR pull failed."
+  echo "Choose how to proceed:"
+  cat <<'PULLMENU'
+  1) Rebase (git pull --rebase)          [recommended for clean history]
+  2) Merge  (git pull --no-rebase)       [creates merge commit]
+  3) Abort / back to menu
+PULLMENU
+
+  read -r -p "Select [1-3]: " choice
+  case "${choice:-}" in
+    1)
+      set +e
+      git pull --rebase
+      local ec=$?
+      set -e
+      if [[ $ec -eq 0 ]]; then
+        echo "[OK] Rebase pull completed."
+      else
+        echo "[ERROR] Rebase failed."
+        echo "[HINT] You may need to resolve conflicts, then run:"
+        echo "  git rebase --continue"
+        echo "or to abort:"
+        echo "  git rebase --abort"
+      fi
+      ;;
+    2)
+      set +e
+      git pull --no-rebase
+      local ec=$?
+      set -e
+      if [[ $ec -eq 0 ]]; then
+        echo "[OK] Merge pull completed."
+      else
+        echo "[ERROR] Merge pull failed."
+        echo "[HINT] You may need to resolve conflicts, then commit the merge."
+      fi
+      ;;
+    *)
+      echo "[INFO] Pull aborted."
+      ;;
+  esac
+
+  return 0
 }
 
-#------------------------------------------------------------------------------
-# Command: Push
-#------------------------------------------------------------------------------
 cmd_push() {
-  # FIX: Check for changes BEFORE prompting
-  local has_changes=false
-  if [[ -n "$(git status --porcelain)" ]]; then
-    has_changes=true
-  fi
+  local branch upstream
 
-  if [[ "$has_changes" == "true" ]]; then
+  branch="$(current_branch)"
+
+  if is_dirty; then
     echo "[WARN] Working tree has uncommitted changes."
     read -r -p "Create commit and push now? (y/N): " ans
     if [[ "${ans,,}" == "y" ]]; then
-      # FIX: Handle git add errors
-      if ! git add -A; then
-        echo "[ERROR] Failed to stage changes."
-        return 1
+      echo "[INFO] Staging changes..."
+      set +e
+      git add -A
+      local add_ec=$?
+      set -e
+      if [[ $add_ec -ne 0 ]]; then
+        echo "[ERROR] git add failed. Fix the issue and try again."
+        return 0
       fi
-      
-      # FIX: Validate commit message
-      local msg=""
-      while [[ -z "${msg// /}" ]]; do  # Remove spaces for validation
-        read -r -p "Commit message: " msg
-        if [[ -z "${msg// /}" ]]; then
-          echo "[WARN] Commit message cannot be empty or only whitespace."
-          read -r -p "Use default message 'chore: update local changes'? (y/N): " use_default
-          if [[ "${use_default,,}" == "y" ]]; then
-            msg="chore: update local changes"
-            break
-          fi
+
+      read -r -p "Commit message: " msg
+      msg="$(trim "${msg:-}")"
+      if [[ -z "$msg" ]]; then
+        msg="chore: update local changes"
+      fi
+
+      echo "[INFO] Creating commit..."
+      set +e
+      git commit -m "$msg"
+      local commit_ec=$?
+      set -e
+
+      if [[ $commit_ec -ne 0 ]]; then
+        echo "[WARN] git commit did not succeed."
+        echo "[HINT] Common reason: nothing to commit (empty commit)."
+        # Re-check dirty status after failed commit attempt
+        if is_dirty; then
+          echo "[WARN] Still dirty after commit attempt. Push will NOT proceed."
+          return 0
         fi
-      done
-      
-      # FIX: Check if there's actually something to commit
-      if git diff --cached --quiet; then
-        echo "[WARN] No changes to commit (all changes may be in .gitignore)."
-        return 1
+        echo "[INFO] Tree is clean. Continuing to push."
       fi
-      
-      # FIX: Handle commit errors
-      if ! git commit -m "$msg"; then
-        echo "[ERROR] Commit failed."
-        return 1
-      fi
-      
-      echo "[OK] Commit created: $msg"
+
     else
       echo "[INFO] Push aborted: commit changes first."
       return 0
     fi
   fi
 
-  local upstream
-  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  # After potential commit attempt, verify clean state
+  if is_dirty; then
+    echo "[WARN] Working tree is still dirty. Refusing to push."
+    echo "[HINT] Commit or stash your changes first."
+    return 0
+  fi
 
+  upstream="$(current_upstream)"
   if [[ -z "${upstream:-}" ]]; then
-    local branch
-    branch="$(git rev-parse --abbrev-ref HEAD)"
-    echo "[INFO] No upstream configured. Pushing and setting upstream to origin/$branch"
-    
-    # FIX: Handle push errors
-    if ! git push -u origin "$branch"; then
-      echo "[ERROR] Failed to push to origin/$branch."
-      return 1
+    echo "[INFO] No upstream configured for '$branch'. Pushing and setting upstream to origin/$branch"
+    set +e
+    git push -u origin "$branch"
+    local ec=$?
+    set -e
+    if [[ $ec -ne 0 ]]; then
+      echo "[ERROR] Push failed. Check authentication / permissions."
+      return 0
     fi
   else
-    # FIX: Handle push errors
-    if ! git push; then
-      echo "[ERROR] Push failed. You may need to pull first or use force push."
-      return 1
+    set +e
+    git push
+    local ec=$?
+    set -e
+    if [[ $ec -ne 0 ]]; then
+      echo "[ERROR] Push failed."
+      echo "[HINT] You may need to pull/rebase first."
+      return 0
     fi
   fi
 
   echo "[OK] Push completed."
+  return 0
 }
 
-#------------------------------------------------------------------------------
-# Cleanup Menu
-#------------------------------------------------------------------------------
+preview_clean() {
+  echo "[INFO] Preview of untracked files/dirs that would be removed:"
+  # -n dry-run
+  set +e
+  git clean -fdn
+  local ec=$?
+  set -e
+  if [[ $ec -ne 0 ]]; then
+    echo "[WARN] Could not preview clean. git clean -fdn failed."
+  fi
+}
+
 cleanup_menu() {
   while true; do
-    safe_clear
+    clear_screen
     print_status
-    cat <<MENU
-╔════════════════════════════════════════════════════════════════╗
-║  3) Решения очистки дерева (локально/удалённо)                 ║
-╚════════════════════════════════════════════════════════════════╝
-  1. Local cleanup: restore tracked + clean untracked (ОПАСНО!)
-  2. Sync to remote (hard reset local to upstream, ОПАСНО!)
-  3. Force remote from local (push --force-with-lease, ОПАСНО!)
+    cat <<'MENU'
+3) Решения очистки дерева (локально/удалённо)
+  1. Local cleanup: restore tracked + clean untracked (опасно)
+  2. Sync to remote (hard reset local to upstream, опасно)
+  3. Force remote from local (push --force-with-lease, опасно)
   4. Stash local changes (безопаснее)
   0. Back
 MENU
 
     read -r -p "Choose cleanup action: " action
-    case "$action" in
+    case "${action:-}" in
       1)
-        echo ""
-        echo "⚠️  WARNING: This will PERMANENTLY DELETE:"
-        echo "   - All uncommitted changes in tracked files"
-        echo "   - All untracked files and directories"
-        echo ""
-        
-        # FIX: Show what will be deleted
-        echo "Files that will be removed:"
-        git status --porcelain | head -20
-        local file_count
-        file_count="$(git status --porcelain | wc -l)"
-        if [[ "$file_count" -gt 20 ]]; then
-          echo "... and $((file_count - 20)) more files"
-        fi
-        echo ""
-        
-        read -r -p "Type 'DELETE' to proceed: " c
-        if [[ "$c" == "DELETE" ]]; then
-          git restore --staged . 2>/dev/null || true
-          git restore . 2>/dev/null || true
+        preview_clean
+        read -r -p "This will discard LOCAL uncommitted changes AND delete untracked files. Continue? (type YES): " c
+        if [[ "$c" == "YES" ]]; then
+          git restore --staged . || true
+          git restore . || true
           git clean -fd
           echo "[OK] Local tracked/untracked changes cleaned."
         else
           echo "[INFO] Cancelled."
         fi
-        read -r -p "Press Enter to continue..." _
+        pause
         ;;
-      
       2)
         local upstream
-        upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
-        
+        upstream="$(current_upstream)"
         if [[ -z "${upstream:-}" ]]; then
-          echo "[WARN] No upstream configured. Cannot sync."
-          read -r -p "Press Enter to continue..." _
+          echo "[WARN] No upstream configured for current branch."
+          echo "[FIX] Set upstream then retry:"
+          echo "  git branch --set-upstream-to origin/$(current_branch) $(current_branch)"
+          pause
         else
-          echo ""
-          echo "⚠️  WARNING: This will HARD RESET your local branch to $upstream"
-          echo "   All local commits and changes will be LOST!"
-          echo ""
-          
-          read -r -p "Type 'RESET' to proceed: " c
-          if [[ "$c" == "RESET" ]]; then
-            if ! git fetch --all --prune; then
-              echo "[ERROR] Failed to fetch updates."
-              read -r -p "Press Enter to continue..." _
+          read -r -p "This will HARD RESET local branch to $upstream and delete untracked files. Continue? (type YES): " c
+          if [[ "$c" == "YES" ]]; then
+            set +e
+            git_try_fetch
+            local ec=$?
+            set -e
+            if [[ $ec -ne 0 ]]; then
+              echo "[WARN] Cannot sync because fetch failed."
+              pause
               continue
             fi
-            
+
+            preview_clean
             git reset --hard "$upstream"
             git clean -fd
             echo "[OK] Local branch synced to upstream."
+            pause
           else
             echo "[INFO] Cancelled."
+            pause
           fi
-          read -r -p "Press Enter to continue..." _
         fi
         ;;
-      
       3)
-        echo ""
-        echo "⚠️  DANGER: This rewrites REMOTE history!"
-        echo "   Other collaborators may have conflicts."
-        echo "   Only use if you know what you're doing."
-        echo ""
-        
-        read -r -p "Type 'FORCE-PUSH' to proceed: " c
-        if [[ "$c" == "FORCE-PUSH" ]]; then
+        read -r -p "This rewrites REMOTE history (force-with-lease). Continue? (type PUSH): " c
+        if [[ "$c" == "PUSH" ]]; then
           local branch
-          branch="$(git rev-parse --abbrev-ref HEAD)"
-          
-          if git push --force-with-lease origin "$branch"; then
+          branch="$(current_branch)"
+          set +e
+          git push --force-with-lease origin "$branch"
+          local ec=$?
+          set -e
+          if [[ $ec -eq 0 ]]; then
             echo "[OK] Remote updated from local with --force-with-lease."
           else
-            echo "[ERROR] Force push failed (remote may have new commits)."
+            echo "[ERROR] Force push failed."
           fi
         else
           echo "[INFO] Cancelled."
         fi
-        read -r -p "Press Enter to continue..." _
+        pause
         ;;
-      
       4)
-        echo "[INFO] Creating stash..."
         local ts
         ts="$(date +%Y%m%d_%H%M%S)"
-        
-        # FIX: Properly handle stash errors
-        if git stash push -u -m "project-git-monitor stash $ts"; then
-          echo "[OK] Stash created: project-git-monitor stash $ts"
-          echo "[INFO] Restore with: git stash pop"
-        else
-          local stash_exit=$?
-          if [[ $stash_exit -eq 1 ]]; then
-            echo "[INFO] No local changes to stash."
-          else
-            echo "[ERROR] Failed to create stash (exit code: $stash_exit)."
-          fi
+
+        # Show status so user knows what will be stashed
+        if ! is_dirty; then
+          echo "[INFO] Nothing to stash (working tree clean)."
+          pause
+          continue
         fi
-        read -r -p "Press Enter to continue..." _
+
+        set +e
+        git stash push -u -m "project-git-monitor stash $ts"
+        local ec=$?
+        set -e
+        if [[ $ec -eq 0 ]]; then
+          echo "[OK] Stash created."
+        else
+          echo "[ERROR] git stash failed."
+          echo "[HINT] Check for repository issues, locked index, or file permission problems."
+        fi
+        pause
         ;;
-      
       0)
         return 0
         ;;
-      
       *)
         echo "[WARN] Unknown option."
-        read -r -p "Press Enter to continue..." _
+        pause
         ;;
     esac
   done
 }
 
-#------------------------------------------------------------------------------
-# Run Main Menu
-#------------------------------------------------------------------------------
 run_main_menu() {
   if [[ -x "$MAIN_MENU_SCRIPT" ]]; then
     "$MAIN_MENU_SCRIPT"
@@ -322,53 +380,31 @@ run_main_menu() {
     bash "$MAIN_MENU_SCRIPT"
   else
     echo "[WARN] Main menu script not found: $MAIN_MENU_SCRIPT"
-    read -r -p "Press Enter to continue..." _
+    pause
   fi
 }
 
-#------------------------------------------------------------------------------
-# Main Menu
-#------------------------------------------------------------------------------
 main() {
   while true; do
-    safe_clear
+    clear_screen
     print_status
-    cat <<MENU
-╔════════════════════════════════════════════════════════════════╗
-║              Project Git Monitor                               ║
-╚════════════════════════════════════════════════════════════════╝
+    cat <<'MENU'
+Project Git Monitor
 1) Пул (обновить локальный проект из Git)
 2) Пуш (отправить локальные изменения в Git)
 3) Решения для очистки дерева от ошибок (в обе стороны)
 4) Запуск основного меню toolkit
 0) Выход
-────────────────────────────────────────────────────────────────
 MENU
 
     read -r -p "Выберите пункт: " choice
-    case "$choice" in
-      1)
-        cmd_pull || echo "[WARN] Pull operation failed or incomplete."
-        read -r -p "Press Enter to continue..." _
-        ;;
-      2)
-        cmd_push || echo "[WARN] Push operation failed or incomplete."
-        read -r -p "Press Enter to continue..." _
-        ;;
-      3)
-        cleanup_menu
-        ;;
-      4)
-        run_main_menu
-        ;;
-      0)
-        echo "Bye."
-        exit 0
-        ;;
-      *)
-        echo "[WARN] Unknown option: $choice"
-        read -r -p "Press Enter to continue..." _
-        ;;
+    case "${choice:-}" in
+      1) cmd_pull || true; pause ;;
+      2) cmd_push || true; pause ;;
+      3) cleanup_menu ;;
+      4) run_main_menu ;;
+      0) echo "Bye."; exit 0 ;;
+      *) echo "[WARN] Unknown option: $choice"; pause ;;
     esac
   done
 }
