@@ -133,4 +133,5 @@ function Close-Log {
     Write-Log -Level INFO -Message "Log session ended."
 }
 
-Export-ModuleMember -Function Write-Log, Write-LogHeader, Write-LogSection, Close-Log
+# This script is loaded via dot-sourcing, not Import-Module
+# Do NOT use Export-ModuleMember here
