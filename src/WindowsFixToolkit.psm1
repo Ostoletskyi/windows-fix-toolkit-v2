@@ -23,16 +23,25 @@ function New-ToolkitState {
         [string]$ReportPath,
         [Parameter(Mandatory)]
         [string]$LogPath,
+        [Parameter(Mandatory)]
+        [string]$TranscriptPath,
         [switch]$NoNetwork,
         [switch]$AssumeYes,
         [switch]$Force,
         [switch]$DryRun
     )
 
+    $resolvedLogPath = [System.IO.Path]::GetFullPath($LogPath)
+    $resolvedTranscriptPath = [System.IO.Path]::GetFullPath($TranscriptPath)
+    if ($resolvedLogPath.Equals($resolvedTranscriptPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $resolvedLogPath = Join-Path $ReportPath 'toolkit.log'
+    }
+
     return [pscustomobject]@{
         Mode       = $Mode
         ReportPath = $ReportPath
-        LogPath    = $LogPath
+        LogPath    = $resolvedLogPath
+        TranscriptPath = $resolvedTranscriptPath
         NoNetwork  = [bool]$NoNetwork
         AssumeYes  = [bool]$AssumeYes
         Force      = [bool]$Force
@@ -73,6 +82,8 @@ function Export-ToolkitReport {
         startedAt = $State.StartedAt
         finishedAt= Get-Date
         isAdmin   = $State.IsAdmin
+        logPath   = $State.LogPath
+        transcriptPath = $State.TranscriptPath
         steps     = $State.Steps
     }
 
@@ -159,6 +170,8 @@ function Invoke-WindowsFix {
         [string]$ReportPath,
         [Parameter(Mandatory)]
         [string]$LogPath,
+        [Parameter(Mandatory)]
+        [string]$TranscriptPath,
         [switch]$NoNetwork,
         [switch]$AssumeYes,
         [switch]$Force
@@ -167,7 +180,7 @@ function Invoke-WindowsFix {
     $isDry = $Mode -eq 'DryRun'
     $effectiveMode = if ($Mode -eq 'DryRun') { 'Full' } else { $Mode }
 
-    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -DryRun:$isDry
+    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -DryRun:$isDry
     Write-ToolkitLog -State $state -Message "Mode=$Mode, IsAdmin=$($state.IsAdmin), ReportPath=$ReportPath"
 
     if (($effectiveMode -in @('Repair','Full')) -and -not $state.IsAdmin) {

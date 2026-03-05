@@ -11,10 +11,11 @@ Windows Fix Toolkit (PowerShell 5.1+) для безопасной диагнос
   - `Repair` — минимальный шаг восстановления: `DISM /CheckHealth`
   - `Full` — `Diagnose` + `DISM /CheckHealth` + экспорт каталога логов
   - `DryRun` — показывает план без выполнения команд
-- Отчётность:
+- Отчётность и логи:
   - `report.json`
   - `report.md`
-  - `transcript.log`
+  - `toolkit.log` (внутренний лог toolkit)
+  - `transcript.log` (только PowerShell transcript)
 - Smoke tests: `tests/smoke.tests.ps1`
 
 ## Требования
@@ -32,9 +33,27 @@ powershell -ExecutionPolicy Bypass -File .\bin\windowsfix.ps1 -Mode Diagnose
 ```
 
 Отчёты создаются в:
-- по умолчанию: `Outputs\WindowsFix_<timestamp>`
+- по умолчанию: `Outputs\WindowsFix_<timestamp>` (timestamp включает миллисекунды, чтобы каждый запуск создавал уникальную папку)
 - либо в пути, переданном через `-ReportPath`
 
+Файлы в `Outputs\WindowsFix_<timestamp>`:
+- `toolkit.log` — сообщения `Write-ToolkitLog` (устойчиво с retry при lock).
+- `transcript.log` — вывод `Start-Transcript`/`Stop-Transcript`, не используется `Add-Content`.
+- `report.json` и `report.md` — структурированный и человеко-читаемый отчёт.
+
+
+
+## Git monitor menu (Bash)
+Добавлена сопровождающая утилита `bin/project-git-monitor.sh` с меню:
+1. **Пул** — `git fetch --all --prune` + `git pull --ff-only`
+2. **Пуш** — отправка локальных изменений (`git push`, при необходимости предложит commit)
+3. **Решения очистки дерева** — локальная очистка, hard sync к upstream, force push (`--force-with-lease`), stash
+4. **Запуск основного меню** — вызов `bin/windowsfix-menu.sh`
+
+Запуск:
+```bash
+bash ./bin/project-git-monitor.sh
+```
 
 ## Bash-меню запуска (удобный launcher)
 Добавлен скрипт `bin/windowsfix-menu.sh`, который показывает интерактивное меню режимов и умеет добавлять флаги (`-NoNetwork`, `-AssumeYes`, `-Force`, `-ReportPath`).
