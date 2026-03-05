@@ -1,16 +1,12 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Diagnose','Repair','Full','SelfTest','DryRun')]
-    [string]$Mode = 'Diagnose',
-    [string]$ReportPath,
-    [string]$LogPath,
-    [switch]$NoNetwork,
-    [switch]$AssumeYes,
-    [switch]$Force
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Args
 )
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
+Write-Host "[INFO] PowerShell entrypoint is deprecated. Redirecting to bash runtime..."
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$bashEntry = Join-Path $scriptDir 'windowsfix.sh'
 
 $script:SCRIPT_BUILD = 'WindowsFixToolkit v0.1.1'
 $scriptPath = $MyInvocation.MyCommand.Path
@@ -20,7 +16,6 @@ $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
 if (-not $ReportPath) {
     $ReportPath = Join-Path $repoRoot ("Outputs/WindowsFix_{0}" -f $timestamp)
 }
-New-Item -Path $ReportPath -ItemType Directory -Force | Out-Null
 
 $transcriptPath = Join-Path $ReportPath 'transcript.log'
 if (-not $LogPath) {
