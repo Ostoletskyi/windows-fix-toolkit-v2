@@ -204,7 +204,8 @@ MENU
         cleanup_menu
         ;;
       4)
-        run_main_menu
+        run_main_menu || true
+        read -r -p "Press Enter to continue..." _
         ;;
       0)
         echo "Bye."
