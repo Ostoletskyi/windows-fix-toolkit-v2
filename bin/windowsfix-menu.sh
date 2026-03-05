@@ -58,10 +58,58 @@ ask_common_flags() {
   printf '%s\n' "${flags[@]}"
 }
 
+print_menu() {
+  printf '%s\n' \
+    '========================================' \
+    ' Windows Fix Toolkit - Bash Launcher Menu' \
+    '========================================' \
+    "Repo: $REPO_ROOT" \
+    "Entry: $ENTRYPOINT" \
+    'Runtime: bash' \
+    '' \
+    '1) SelfTest' \
+    '2) Diagnose' \
+    '3) Repair (DISM CheckHealth MVP)' \
+    '4) Full (Diagnose + Repair + logs export)' \
+    '5) DryRun (plan only, no actions)' \
+    '6) Custom mode with flags' \
+    '0) Exit'
+}
+
 main_menu() {
   while true; do
     clear || true
-    cat <<MENU
+    print_menu
+
+    read -r -p "Select option: " choice
+
+    case "$choice" in
+      1) run_toolkit "SelfTest" ;;
+      2) run_toolkit "Diagnose" ;;
+      3) run_toolkit "Repair" ;;
+      4) run_toolkit "Full" ;;
+      5) run_toolkit "DryRun" ;;
+      6)
+        read -r -p "Mode (SelfTest/Diagnose/Repair/Full/DryRun): " mode
+        case "$mode" in
+          SelfTest|Diagnose|Repair|Full|DryRun) ;;
+          *)
+            echo "[WARN] Invalid mode: $mode"
+            read -r -p "Press Enter to continue..." _
+            continue
+            ;;
+        esac
+
+        mapfile -t flags < <(ask_common_flags)
+        run_toolkit "$mode" "${flags[@]}"
+        ;;
+      0)
+        echo "Bye."
+        exit 0
+        ;;
+      *)
+        echo "[WARN] Unknown option: $choice"
+        read -r -p "Press Enter to continue..." _
         ;;
     esac
   done
