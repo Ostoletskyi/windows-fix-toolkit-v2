@@ -3,32 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-ENTRYPOINT="$REPO_ROOT/bin/windowsfix.ps1"
+ENTRYPOINT="$REPO_ROOT/bin/windowsfix.sh"
 
 if [[ ! -f "$ENTRYPOINT" ]]; then
   echo "[ERROR] Entrypoint not found: $ENTRYPOINT"
-  exit 1
-fi
-
-pick_powershell() {
-  if command -v powershell.exe >/dev/null 2>&1; then
-    echo "powershell.exe"
-    return 0
-  fi
-  if command -v powershell >/dev/null 2>&1; then
-    echo "powershell"
-    return 0
-  fi
-  if command -v pwsh >/dev/null 2>&1; then
-    echo "pwsh"
-    return 0
-  fi
-
-  return 1
-}
-
-if ! PS_BIN="$(pick_powershell)"; then
-  echo "[ERROR] PowerShell not found in PATH (tried: powershell.exe, powershell, pwsh)."
   exit 1
 fi
 
@@ -38,9 +16,7 @@ run_toolkit() {
   local extra=("$@")
 
   local cmd=(
-    "$PS_BIN"
-    -ExecutionPolicy Bypass
-    -File "$ENTRYPOINT"
+    bash "$ENTRYPOINT"
     -Mode "$mode"
   )
 
@@ -84,7 +60,6 @@ main_menu() {
   while true; do
     clear || true
     cat <<MENU
-        ;;
     esac
   done
 }
