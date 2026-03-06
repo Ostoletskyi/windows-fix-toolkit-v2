@@ -280,6 +280,108 @@ repair() {
 }
 
 
+
+collect_windows_logs() {
+  local out_dir="$REPORT_PATH/collected-logs"
+  mkdir -p "$out_dir"
+
+  local copied=0
+  local candidates=(
+    "/c/Windows/Logs/CBS/CBS.log"
+    "/c/Windows/Logs/DISM/dism.log"
+    "/c/Windows/WindowsUpdate.log"
+  )
+
+  for f in "${candidates[@]}"; do
+    if [[ -f "$f" ]]; then
+      cp "$f" "$out_dir/" 2>/dev/null || true
+      copied=$((copied+1))
+    fi
+  done
+
+  COLLECTED_LOGS_DIR="$out_dir"
+  COLLECTED_LOGS_COUNT="$copied"
+}
+
+analyze_collected_logs() {
+  local out_dir="$1"
+  local issues=()
+
+  if [[ ! -d "$out_dir" ]]; then
+    ANALYSIS_STATUS="WARN"
+    ANALYSIS_DETAILS="Log directory not found: $out_dir"
+    ANALYSIS_RECOMMEND="Run Diagnose/Repair as administrator and ensure Windows logs are accessible."
+    return
+  fi
+
+  local files=("$out_dir"/*.log)
+  if [[ ! -e "${files[0]}" ]]; then
+    ANALYSIS_STATUS="WARN"
+    ANALYSIS_DETAILS="No .log files collected in $out_dir"
+    ANALYSIS_RECOMMEND="Collect CBS/DISM/WU logs first, then re-run analysis."
+    return
+  fi
+
+  if grep -Eqi "corrupt|component store corruption|cannot repair|repair failed|0x800f081f|0x800f0906" "$out_dir"/*.log 2>/dev/null; then
+    issues+=("Component corruption signatures detected (CBS/DISM).")
+  fi
+  if grep -Eqi "windows update|wuauserv|0x8024|wu error|download failed" "$out_dir"/*.log 2>/dev/null; then
+    issues+=("Windows Update related errors detected.")
+  fi
+  if grep -Eqi "sfc|windows resource protection|cannot fix|hash mismatch" "$out_dir"/*.log 2>/dev/null; then
+    issues+=("SFC/WRP repair findings detected.")
+  fi
+
+  if [[ ${#issues[@]} -eq 0 ]]; then
+    ANALYSIS_STATUS="OK"
+    ANALYSIS_DETAILS="Problems not detected in collected logs (heuristic scan)."
+    ANALYSIS_RECOMMEND="No immediate repair recommendation from log analysis."
+    return
+  fi
+
+  ANALYSIS_STATUS="WARN"
+  ANALYSIS_DETAILS="$(printf '%s ' "${issues[@]}")"
+  ANALYSIS_RECOMMEND="Recommended: run Repair mode with DISM CheckHealth/ScanHealth + SFC, then reboot and repeat Diagnose."
+}
+
+append_analysis_steps() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    add_step "Logs: Collect" "SKIPPED" 0 0 "DryRun: log collection skipped"
+    progress_tick "Logs: Collect" "SKIPPED"
+    add_step "Analysis: Known Windows logs" "SKIPPED" 0 0 "DryRun: log analysis skipped"
+    progress_tick "Analysis: Known Windows logs" "SKIPPED"
+    return
+  fi
+
+  local t0 t1 duration
+  t0=$(date +%s%3N)
+  collect_windows_logs
+  t1=$(date +%s%3N)
+  duration=$((t1-t0))
+  local status="OK"
+  [[ "${COLLECTED_LOGS_COUNT:-0}" == "0" ]] && status="WARN"
+  add_step "Logs: Collect" "$status" 0 "$duration" "Collected logs: ${COLLECTED_LOGS_COUNT:-0} in ${COLLECTED_LOGS_DIR:-unknown}"
+  progress_tick "Logs: Collect" "$status"
+
+  t0=$(date +%s%3N)
+  analyze_collected_logs "${COLLECTED_LOGS_DIR:-$REPORT_PATH/collected-logs}"
+  t1=$(date +%s%3N)
+  duration=$((t1-t0))
+
+  local details="$ANALYSIS_DETAILS"
+  if [[ -n "${ANALYSIS_RECOMMEND:-}" ]]; then
+    details+=" Recommendation: $ANALYSIS_RECOMMEND"
+  fi
+  add_step "Analysis: Known Windows logs" "$ANALYSIS_STATUS" 0 "$duration" "$details"
+  progress_tick "Analysis: Known Windows logs" "$ANALYSIS_STATUS"
+
+  if [[ "$ANALYSIS_STATUS" == "WARN" ]]; then
+    log_line WARN "Analysis found potential issues. $ANALYSIS_RECOMMEND"
+  else
+    log_line INFO "Analysis: problems not detected in collected logs."
+  fi
+}
+
 run_toolkit() {
   STARTED_AT="$(now_iso)"
   STEPS=()
@@ -293,9 +395,9 @@ run_toolkit() {
 
   case "$effective" in
     SelfTest) init_progress 5 ;;
-    Diagnose) init_progress 7 ;;
-    Repair) init_progress 3 ;;
-    Full) init_progress 11 ;;
+    Diagnose) init_progress 9 ;;
+    Repair) init_progress 5 ;;
+    Full) init_progress 13 ;;
     *) init_progress 1 ;;
   esac
 
@@ -311,14 +413,21 @@ run_toolkit() {
   local rc=0
   case "$effective" in
     SelfTest) selftest || rc=1 ;;
-    Diagnose) diagnose ;;
-    Repair) repair || rc=1 ;;
+    Diagnose)
+      diagnose
+      append_analysis_steps
+      ;;
+    Repair)
+      repair || rc=1
+      append_analysis_steps
+      ;;
     Full)
       diagnose
       repair || rc=1
       mkdir -p "$REPORT_PATH/collected-logs"
       add_step "Export logs" "OK" 0 0 "Created log export directory: $REPORT_PATH/collected-logs"
       progress_tick "Export logs" "OK"
+      append_analysis_steps
       ;;
     *)
       add_step "Invalid mode" "FAIL" 3 0 "Unsupported mode: $MODE"
