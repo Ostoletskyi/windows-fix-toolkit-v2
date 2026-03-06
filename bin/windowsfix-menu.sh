@@ -10,6 +10,41 @@ if [[ ! -f "$ENTRYPOINT" ]]; then
   exit 1
 fi
 
+is_admin() {
+  if command -v net.exe >/dev/null 2>&1; then
+    net.exe session >/dev/null 2>&1 && return 0 || return 1
+  fi
+  return 1
+}
+
+mode_requires_admin() {
+  local mode="$1"
+  [[ "$mode" == "Repair" || "$mode" == "Full" ]]
+}
+
+run_elevated() {
+  local cmdline="$1"
+
+  if ! command -v powershell.exe >/dev/null 2>&1; then
+    echo "[ERROR] Для автоповышения прав требуется powershell.exe в PATH."
+    return 2
+  fi
+
+  local ps_file
+  ps_file="$(mktemp).ps1"
+  cat > "$ps_file" <<'PS'
+param([Parameter(Mandatory=$true)][string]$CmdLine)
+$p = Start-Process -FilePath "bash" -ArgumentList @('-lc', $CmdLine) -Verb RunAs -Wait -PassThru
+exit $p.ExitCode
+PS
+
+  echo "[INFO] Запускаю повышенный процесс (UAC prompt)..."
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file" -CmdLine "$cmdline"
+  local rc=$?
+  rm -f "$ps_file" 2>/dev/null || true
+  return $rc
+}
+
 spinner_run() {
   local out_file="$1"
   shift
@@ -83,6 +118,20 @@ run_toolkit() {
   shift
   local extra=("$@")
 
+  local report_path=""
+  local has_report_path=0
+  for ((i=0; i<${#extra[@]}; i++)); do
+    if [[ "${extra[$i]}" == "-ReportPath" && $((i+1)) -lt ${#extra[@]} ]]; then
+      report_path="${extra[$((i+1))]}"
+      has_report_path=1
+      break
+    fi
+  done
+  if [[ $has_report_path -eq 0 ]]; then
+    report_path="$REPO_ROOT/Outputs/WindowsFix_$(date +%Y%m%d_%H%M%S_%3N)"
+    extra+=("-ReportPath" "$report_path")
+  fi
+
   local cmd=(
     bash "$ENTRYPOINT"
     -Mode "$mode"
@@ -95,19 +144,30 @@ run_toolkit() {
   echo
   echo "[RUN] ${cmd[*]}"
 
-  local out_file
+  local out_file exit_code
   out_file="$(mktemp)"
 
-  set +e
-  spinner_run "$out_file" "${cmd[@]}"
-  local exit_code=$?
-  set -e
+  if mode_requires_admin "$mode" && ! is_admin; then
+    local cmdline
+    cmdline="$(printf '%q ' "${cmd[@]}")"
+    set +e
+    run_elevated "$cmdline" >"$out_file" 2>&1
+    exit_code=$?
+    set -e
+    printf '[WORK] ✓ Выполнение завершено (elevated).
+'
+  else
+    set +e
+    spinner_run "$out_file" "${cmd[@]}"
+    exit_code=$?
+    set -e
+  fi
 
   cat "$out_file"
 
-  local report_path
-  report_path="$(awk -F': ' '/^ReportPath/{print $2; exit}' "$out_file" | tr -d '\r')"
-
+  if [[ -z "${report_path:-}" || ! -d "$report_path" ]]; then
+    report_path="$(awk -F': ' '/^ReportPath/{print $2; exit}' "$out_file" | tr -d '\r')"
+  fi
   if [[ -z "${report_path:-}" ]]; then
     report_path="$(ls -1dt "$REPO_ROOT"/Outputs/WindowsFix_* 2>/dev/null | head -n1 || true)"
   fi
@@ -117,7 +177,7 @@ run_toolkit() {
   case "$exit_code" in
     0) echo "[INFO] Выполнено успешно." ;;
     1) echo "[WARN] Обнаружены ошибки в шагах. Проверьте Step outcomes и report.md." ;;
-    2) echo "[WARN] Для режима Repair/Full требуются права администратора. Это не падение скрипта." ;;
+    2) echo "[WARN] Для режима Repair/Full требуются права администратора. Если UAC отклонён — это ожидаемо." ;;
     3) echo "[ERROR] Непредвиденная ошибка выполнения. Смотрите toolkit.log/report.md." ;;
     *) echo "[WARN] Неожиданный код завершения: $exit_code" ;;
   esac
@@ -130,6 +190,7 @@ run_toolkit() {
   read -r -p "Press Enter to continue..." _ || true
   return 0
 }
+
 
 ask_common_flags() {
   local flags=()
