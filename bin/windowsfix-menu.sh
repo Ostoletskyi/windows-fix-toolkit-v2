@@ -33,8 +33,8 @@ run_elevated() {
     return 2
   fi
 
-  local cmdline
-  cmdline=""$ENTRYPOINT" -Mode "$mode" -ReportPath "$report_path""
+  local cmd=()
+  cmd+=("$ENTRYPOINT" "-Mode" "$mode" "-ReportPath" "$report_path")
 
   local i=0
   while [[ $i -lt ${#extra_flags[@]} ]]; do
@@ -43,8 +43,15 @@ run_elevated() {
       i=$((i+2))
       continue
     fi
-    cmdline+=" $token"
+    cmd+=("$token")
     i=$((i+1))
+  done
+
+  local cmdline=""
+  local q
+  for token in "${cmd[@]}"; do
+    printf -v q '%q' "$token"
+    cmdline+="$q "
   done
 
   local bash_path
