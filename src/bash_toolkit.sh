@@ -257,12 +257,12 @@ diagnose() {
 
 repair() {
   if [[ "$DRY_RUN" == "1" ]]; then
-    add_step "Repair: DISM CheckHealth" "SKIPPED" 0 0 "DryRun: dism.exe /Online /Cleanup-Image /CheckHealth"
-    progress_tick "Repair: DISM CheckHealth" "SKIPPED"
-    add_step "Repair: DISM ScanHealth" "SKIPPED" 0 0 "DryRun: dism.exe /Online /Cleanup-Image /ScanHealth"
-    progress_tick "Repair: DISM ScanHealth" "SKIPPED"
-    add_step "Repair: SFC ScanNow" "SKIPPED" 0 0 "DryRun: sfc.exe /scannow"
-    progress_tick "Repair: SFC ScanNow" "SKIPPED"
+    add_step "Repair: DISM CheckHealth" "PLANNED" 0 0 "DryRun preview: dism.exe /Online /Cleanup-Image /CheckHealth (not executed)"
+    progress_tick "Repair: DISM CheckHealth" "PLANNED"
+    add_step "Repair: DISM ScanHealth" "PLANNED" 0 0 "DryRun preview: dism.exe /Online /Cleanup-Image /ScanHealth (not executed)"
+    progress_tick "Repair: DISM ScanHealth" "PLANNED"
+    add_step "Repair: SFC ScanNow" "PLANNED" 0 0 "DryRun preview: sfc.exe /scannow (not executed)"
+    progress_tick "Repair: SFC ScanNow" "PLANNED"
     return 0
   fi
 

@@ -123,16 +123,17 @@ print_run_summary() {
   local report_json="$report_path/report.json"
   local toolkit_log="$report_path/toolkit.log"
 
-  local steps_total=0 ok=0 warn=0 fail=0 skipped=0
+  local steps_total=0 ok=0 warn=0 fail=0 skipped=0 planned=0
   if [[ -f "$report_md" ]]; then
     steps_total="$(grep -c '^- \*\*' "$report_md" || true)"
     ok="$(grep -cE '^- \*\*.*: OK \(' "$report_md" || true)"
     warn="$(grep -cE '^- \*\*.*: WARN \(' "$report_md" || true)"
     fail="$(grep -cE '^- \*\*.*: FAIL \(' "$report_md" || true)"
     skipped="$(grep -cE '^- \*\*.*: SKIPPED \(' "$report_md" || true)"
+    planned="$(grep -cE '^- \*\*.*: PLANNED \(' "$report_md" || true)"
   fi
 
-  echo "Steps      : total=$steps_total, ok=$ok, warn=$warn, fail=$fail, skipped=$skipped"
+  echo "Steps      : total=$steps_total, ok=$ok, warn=$warn, fail=$fail, skipped=$skipped, planned=$planned"
   echo "Artifacts  :"
   [[ -f "$report_json" ]] && echo "  - $report_json"
   [[ -f "$report_md" ]] && echo "  - $report_md"
@@ -141,10 +142,14 @@ print_run_summary() {
   if [[ -f "$report_md" ]]; then
     echo
     echo "Step outcomes:"
-    grep -E '^- \*\*.*: (OK|WARN|FAIL|SKIPPED) \(' "$report_md" || true
+    grep -E '^- \*\*.*: (OK|WARN|FAIL|SKIPPED|PLANNED) \(' "$report_md" || true
   fi
 
   echo "===================================="
+  if [[ "$mode" == "DryRun" ]]; then
+    echo
+    echo "[NOTE] DryRun = preview mode. Repair commands (DISM/SFC) are shown as PLANNED and are NOT executed."
+  fi
 }
 
 
@@ -152,8 +157,9 @@ print_mode_banner() {
   local mode="$1"
   case "$mode" in
     DryRun)
-      echo "[INFO] You selected DryRun: repair actions are preview-only in this mode."
-      echo "[INFO] Safe diagnostics and log analysis still run; repair commands stay SKIPPED."
+      echo "[INFO] You selected DryRun: this is PREVIEW ONLY mode."
+      echo "[INFO] DISM/SFC repair steps will be marked PLANNED and will NOT run."
+      echo "[INFO] Safe diagnostics and log analysis still run; repair commands stay PLANNED."
       ;;
     Diagnose)
       echo "[INFO] Running real diagnostics (system/service/network checks + log analysis)."
