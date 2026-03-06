@@ -17,7 +17,7 @@ Windows Fix Toolkit в **единой bash-среде** (без обязател
 ## Режимы
 - `SelfTest`
 - `Diagnose`
-- `Repair` (MVP: DISM CheckHealth)
+- `Repair` (DISM CheckHealth + опционально DISM ScanHealth + SFC /scannow)
 - `Full` (Diagnose + Repair + экспорт каталога логов)
 - `DryRun` (план без выполнения опасных шагов)
 
@@ -29,6 +29,16 @@ bash ./bin/windowsfix.sh -Mode DryRun
 ```
 
 - Для `Repair` и `Full` без прав администратора ожидаем `ExitCode=2` и шаг `Admin check: FAIL` (это корректное поведение, не падение меню).
+
+
+## Где сканирование системы
+Сканирование выполняется в режиме `Repair` и `Full`:
+1. `dism.exe /Online /Cleanup-Image /CheckHealth`
+2. `dism.exe /Online /Cleanup-Image /ScanHealth` (по подтверждению)
+3. `sfc.exe /scannow` (по подтверждению)
+
+Чтобы запускать эти шаги без дополнительных вопросов, используйте флаг `-AssumeYes` (или `-Force`).
+В `DryRun` шаги показываются как план (`SKIPPED`), без реального запуска.
 
 ## Параметры
 - `-Mode Diagnose|Repair|Full|SelfTest|DryRun`

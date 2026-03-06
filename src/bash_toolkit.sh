@@ -176,6 +176,19 @@ selftest() {
   return $any_fail
 }
 
+confirm_action() {
+  local prompt="$1"
+  if [[ "${ASSUME_YES:-0}" == "1" || "${FORCE:-0}" == "1" ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    return 1
+  fi
+  local ans
+  read -r -p "$prompt [y/N]: " ans
+  [[ "${ans,,}" == "y" ]]
+}
+
 diagnose() {
   run_cmd 20 cmd.exe /c ver
   add_step "Snapshot: OS version" "OK" "$CMD_EXIT_CODE" "$CMD_DURATION_MS" "$CMD_STDOUT"
@@ -214,19 +227,58 @@ repair() {
   if [[ "$DRY_RUN" == "1" ]]; then
     add_step "Repair: DISM CheckHealth" "SKIPPED" 0 0 "DryRun: dism.exe /Online /Cleanup-Image /CheckHealth"
     progress_tick "Repair: DISM CheckHealth" "SKIPPED"
+    add_step "Repair: DISM ScanHealth" "SKIPPED" 0 0 "DryRun: dism.exe /Online /Cleanup-Image /ScanHealth"
+    progress_tick "Repair: DISM ScanHealth" "SKIPPED"
+    add_step "Repair: SFC ScanNow" "SKIPPED" 0 0 "DryRun: sfc.exe /scannow"
+    progress_tick "Repair: SFC ScanNow" "SKIPPED"
     return 0
   fi
+
+  local rc=0
 
   run_cmd 1800 dism.exe /Online /Cleanup-Image /CheckHealth
   if [[ "$CMD_EXIT_CODE" == "0" ]]; then
     add_step "Repair: DISM CheckHealth" "OK" 0 "$CMD_DURATION_MS" "$CMD_STDOUT"
     progress_tick "Repair: DISM CheckHealth" "OK"
-    return 0
+  else
+    add_step "Repair: DISM CheckHealth" "FAIL" "$CMD_EXIT_CODE" "$CMD_DURATION_MS" "$CMD_STDERR"
+    progress_tick "Repair: DISM CheckHealth" "FAIL"
+    rc=1
   fi
-  add_step "Repair: DISM CheckHealth" "FAIL" "$CMD_EXIT_CODE" "$CMD_DURATION_MS" "$CMD_STDERR"
-  progress_tick "Repair: DISM CheckHealth" "FAIL"
-  return 1
+
+  if confirm_action "Run DISM ScanHealth? (can take significant time)"; then
+    run_cmd 3600 dism.exe /Online /Cleanup-Image /ScanHealth
+    if [[ "$CMD_EXIT_CODE" == "0" ]]; then
+      add_step "Repair: DISM ScanHealth" "OK" 0 "$CMD_DURATION_MS" "$CMD_STDOUT"
+      progress_tick "Repair: DISM ScanHealth" "OK"
+    else
+      add_step "Repair: DISM ScanHealth" "FAIL" "$CMD_EXIT_CODE" "$CMD_DURATION_MS" "$CMD_STDERR"
+      progress_tick "Repair: DISM ScanHealth" "FAIL"
+      rc=1
+    fi
+  else
+    add_step "Repair: DISM ScanHealth" "SKIPPED" 0 0 "Skipped by user"
+    progress_tick "Repair: DISM ScanHealth" "SKIPPED"
+  fi
+
+  if confirm_action "Run SFC /scannow?"; then
+    run_cmd 5400 sfc.exe /scannow
+    if [[ "$CMD_EXIT_CODE" == "0" ]]; then
+      add_step "Repair: SFC ScanNow" "OK" 0 "$CMD_DURATION_MS" "$CMD_STDOUT"
+      progress_tick "Repair: SFC ScanNow" "OK"
+    else
+      add_step "Repair: SFC ScanNow" "FAIL" "$CMD_EXIT_CODE" "$CMD_DURATION_MS" "$CMD_STDERR"
+      progress_tick "Repair: SFC ScanNow" "FAIL"
+      rc=1
+    fi
+  else
+    add_step "Repair: SFC ScanNow" "SKIPPED" 0 0 "Skipped by user"
+    progress_tick "Repair: SFC ScanNow" "SKIPPED"
+  fi
+
+  return $rc
 }
+
 
 run_toolkit() {
   STARTED_AT="$(now_iso)"
@@ -242,8 +294,8 @@ run_toolkit() {
   case "$effective" in
     SelfTest) init_progress 5 ;;
     Diagnose) init_progress 7 ;;
-    Repair) init_progress 1 ;;
-    Full) init_progress 9 ;;
+    Repair) init_progress 3 ;;
+    Full) init_progress 11 ;;
     *) init_progress 1 ;;
   esac
 

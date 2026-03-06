@@ -248,7 +248,7 @@ print_menu() {
     '' \
     '1) SelfTest' \
     '2) Diagnose' \
-    '3) Repair (DISM CheckHealth MVP)' \
+    '3) Repair (DISM CheckHealth + ScanHealth + SFC)' \
     '4) Full (Diagnose + Repair + logs export)' \
     '5) DryRun (plan only, no actions)' \
     '6) Custom mode with flags' \
