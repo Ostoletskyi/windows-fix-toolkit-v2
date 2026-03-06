@@ -345,14 +345,6 @@ analyze_collected_logs() {
 }
 
 append_analysis_steps() {
-  if [[ "$DRY_RUN" == "1" ]]; then
-    add_step "Logs: Collect" "SKIPPED" 0 0 "DryRun: log collection skipped"
-    progress_tick "Logs: Collect" "SKIPPED"
-    add_step "Analysis: Known Windows logs" "SKIPPED" 0 0 "DryRun: log analysis skipped"
-    progress_tick "Analysis: Known Windows logs" "SKIPPED"
-    return
-  fi
-
   local t0 t1 duration
   t0=$(date +%s%3N)
   collect_windows_logs
@@ -360,7 +352,11 @@ append_analysis_steps() {
   duration=$((t1-t0))
   local status="OK"
   [[ "${COLLECTED_LOGS_COUNT:-0}" == "0" ]] && status="WARN"
-  add_step "Logs: Collect" "$status" 0 "$duration" "Collected logs: ${COLLECTED_LOGS_COUNT:-0} in ${COLLECTED_LOGS_DIR:-unknown}"
+  local collect_details="Collected logs: ${COLLECTED_LOGS_COUNT:-0} in ${COLLECTED_LOGS_DIR:-unknown}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    collect_details+=" (safe diagnostics in DryRun)"
+  fi
+  add_step "Logs: Collect" "$status" 0 "$duration" "$collect_details"
   progress_tick "Logs: Collect" "$status"
 
   t0=$(date +%s%3N)

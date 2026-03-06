@@ -145,8 +145,8 @@ print_mode_banner() {
   local mode="$1"
   case "$mode" in
     DryRun)
-      echo "[INFO] You selected DryRun: this mode ONLY builds the action plan."
-      echo "[INFO] Real DISM/SFC/log analysis execution is NOT performed in DryRun."
+      echo "[INFO] You selected DryRun: repair actions are preview-only in this mode."
+      echo "[INFO] Safe diagnostics and log analysis still run; repair commands stay SKIPPED."
       ;;
     Diagnose)
       echo "[INFO] Running real diagnostics (system/service/network checks + log analysis)."
