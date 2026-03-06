@@ -164,6 +164,7 @@ selftest() {
   for c in "${checks[@]}"; do
     read -r -a arr <<<"$c"
     run_cmd 30 "${arr[@]}"
+    print_cmd_result "SelfTest: $c" 4
     if [[ "$CMD_EXIT_CODE" == "0" ]]; then
       add_step "SelfTest: $c" "OK" 0 "$CMD_DURATION_MS" "$CMD_STDOUT $CMD_STDERR"
       progress_tick "SelfTest: $c" "OK"
@@ -176,13 +177,41 @@ selftest() {
   return $any_fail
 }
 
+
+print_cmd_result() {
+  local title="$1"
+  local max_lines="${2:-8}"
+  echo "[RESULT] $title | exit=$CMD_EXIT_CODE | duration=${CMD_DURATION_MS}ms"
+
+  local shown=0
+  if [[ -n "${CMD_STDOUT:-}" ]]; then
+    echo "[STDOUT]"
+    while IFS= read -r line; do
+      echo "  $line"
+      shown=$((shown+1))
+      [[ $shown -ge $max_lines ]] && { echo "  ..."; break; }
+    done <<< "$CMD_STDOUT"
+  fi
+
+  shown=0
+  if [[ -n "${CMD_STDERR:-}" ]]; then
+    echo "[STDERR]"
+    while IFS= read -r line; do
+      echo "  $line"
+      shown=$((shown+1))
+      [[ $shown -ge $max_lines ]] && { echo "  ..."; break; }
+    done <<< "$CMD_STDERR"
+  fi
+}
+
 confirm_action() {
   local prompt="$1"
   if [[ "${ASSUME_YES:-0}" == "1" || "${FORCE:-0}" == "1" ]]; then
     return 0
   fi
   if [[ ! -t 0 ]]; then
-    return 1
+    # non-interactive session (e.g. elevated child shell). default to yes to avoid silent skip.
+    return 0
   fi
   local ans
   read -r -p "$prompt [y/N]: " ans
@@ -191,11 +220,13 @@ confirm_action() {
 
 diagnose() {
   run_cmd 20 cmd.exe /c ver
+  print_cmd_result "Snapshot: OS version" 6
   add_step "Snapshot: OS version" "OK" "$CMD_EXIT_CODE" "$CMD_DURATION_MS" "$CMD_STDOUT"
   progress_tick "Snapshot: OS version" "OK"
 
   for svc in wuauserv bits cryptsvc trustedinstaller; do
     run_cmd 20 sc.exe query "$svc"
+    print_cmd_result "Service: $svc" 6
     if [[ "$CMD_EXIT_CODE" == "0" ]]; then
       add_step "Service: $svc" "OK" 0 "$CMD_DURATION_MS" "$CMD_STDOUT"
       progress_tick "Service: $svc" "OK"
@@ -210,6 +241,7 @@ diagnose() {
     progress_tick "Network: DNS resolve" "SKIPPED"
   else
     run_cmd 20 nslookup www.microsoft.com
+    print_cmd_result "Network: DNS resolve" 6
     if [[ "$CMD_EXIT_CODE" == "0" ]]; then
       add_step "Network: DNS resolve" "OK" 0 "$CMD_DURATION_MS" "$CMD_STDOUT"
       progress_tick "Network: DNS resolve" "OK"
@@ -236,7 +268,9 @@ repair() {
 
   local rc=0
 
+  echo "[ACTION] Running DISM CheckHealth..."
   run_cmd 1800 dism.exe /Online /Cleanup-Image /CheckHealth
+  print_cmd_result "DISM CheckHealth" 10
   if [[ "$CMD_EXIT_CODE" == "0" ]]; then
     add_step "Repair: DISM CheckHealth" "OK" 0 "$CMD_DURATION_MS" "$CMD_STDOUT"
     progress_tick "Repair: DISM CheckHealth" "OK"
@@ -247,7 +281,9 @@ repair() {
   fi
 
   if confirm_action "Run DISM ScanHealth? (can take significant time)"; then
+    echo "[ACTION] Running DISM ScanHealth..."
     run_cmd 3600 dism.exe /Online /Cleanup-Image /ScanHealth
+    print_cmd_result "DISM ScanHealth" 10
     if [[ "$CMD_EXIT_CODE" == "0" ]]; then
       add_step "Repair: DISM ScanHealth" "OK" 0 "$CMD_DURATION_MS" "$CMD_STDOUT"
       progress_tick "Repair: DISM ScanHealth" "OK"
@@ -262,7 +298,9 @@ repair() {
   fi
 
   if confirm_action "Run SFC /scannow?"; then
+    echo "[ACTION] Running SFC /scannow..."
     run_cmd 5400 sfc.exe /scannow
+    print_cmd_result "SFC ScanNow" 10
     if [[ "$CMD_EXIT_CODE" == "0" ]]; then
       add_step "Repair: SFC ScanNow" "OK" 0 "$CMD_DURATION_MS" "$CMD_STDOUT"
       progress_tick "Repair: SFC ScanNow" "OK"
