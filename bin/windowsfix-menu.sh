@@ -52,10 +52,10 @@ run_elevated() {
 
   local bash_path entrypoint_path
   bash_path="$(command -v bash)"
+  # Keep entrypoint in POSIX form (/c/.../script.sh) because bash expects POSIX paths.
   entrypoint_path="$ENTRYPOINT"
   if command -v cygpath >/dev/null 2>&1; then
     bash_path="$(cygpath -w "$bash_path")"
-    entrypoint_path="$(cygpath -w "$entrypoint_path")"
   fi
 
   local ps_file
@@ -223,6 +223,9 @@ run_toolkit() {
     exit_code=$?
     set -e
     printf '[WORK] ✓ Повышенный запуск завершён.\n'
+    if [[ ! -f "$report_path/report.md" && ! -f "$report_path/report.json" ]]; then
+      echo "[WARN] Elevated process did not write reports to requested ReportPath: $report_path" >>"$out_file"
+    fi
   else
     set +e
     spinner_run "$out_file" "${cmd[@]}"
