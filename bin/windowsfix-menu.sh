@@ -33,9 +33,7 @@ run_elevated() {
     return 2
   fi
 
-  local cmd=()
-  cmd+=("$ENTRYPOINT" "-Mode" "$mode" "-ReportPath" "$report_path")
-
+  local filtered_flags=()
   local i=0
   while [[ $i -lt ${#extra_flags[@]} ]]; do
     local token="${extra_flags[$i]}"
@@ -43,21 +41,21 @@ run_elevated() {
       i=$((i+2))
       continue
     fi
-    cmd+=("$token")
+    filtered_flags+=("$token")
     i=$((i+1))
   done
 
-  local cmdline=""
-  local q
-  for token in "${cmd[@]}"; do
-    printf -v q '%q' "$token"
-    cmdline+="$q "
-  done
+  local extra_joined=""
+  if [[ ${#filtered_flags[@]} -gt 0 ]]; then
+    extra_joined="$(printf '%s\n' "${filtered_flags[@]}")"
+  fi
 
-  local bash_path
+  local bash_path entrypoint_path
   bash_path="$(command -v bash)"
+  entrypoint_path="$ENTRYPOINT"
   if command -v cygpath >/dev/null 2>&1; then
     bash_path="$(cygpath -w "$bash_path")"
+    entrypoint_path="$(cygpath -w "$entrypoint_path")"
   fi
 
   local ps_file
@@ -65,20 +63,30 @@ run_elevated() {
   cat > "$ps_file" <<'PS'
 param(
   [Parameter(Mandatory=$true)][string]$BashPath,
-  [Parameter(Mandatory=$true)][string]$CmdLine
+  [Parameter(Mandatory=$true)][string]$EntryPoint,
+  [Parameter(Mandatory=$true)][string]$Mode,
+  [Parameter(Mandatory=$true)][string]$ReportPath,
+  [string]$ExtraArgsRaw = ""
 )
-$p = Start-Process -FilePath $BashPath -ArgumentList @('-lc', $CmdLine) -Verb RunAs -Wait -PassThru
+
+$argList = @($EntryPoint, '-Mode', $Mode, '-ReportPath', $ReportPath)
+if ($ExtraArgsRaw) {
+  $extra = $ExtraArgsRaw -split "`n" | Where-Object { $_ -ne '' }
+  if ($extra.Count -gt 0) {
+    $argList += $extra
+  }
+}
+
+$p = Start-Process -FilePath $BashPath -ArgumentList $argList -Verb RunAs -Wait -PassThru
 exit $p.ExitCode
 PS
 
   echo "[INFO] Запускаю повышенный процесс (UAC prompt)..."
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file" -BashPath "$bash_path" -CmdLine "$cmdline"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file"     -BashPath "$bash_path"     -EntryPoint "$entrypoint_path"     -Mode "$mode"     -ReportPath "$report_path"     -ExtraArgsRaw "$extra_joined"
   local rc=$?
   rm -f "$ps_file" 2>/dev/null || true
   return $rc
 }
-
-
 spinner_run() {
   local out_file="$1"
   shift
@@ -224,8 +232,17 @@ run_toolkit() {
 
   cat "$out_file"
 
+  local reported_path
+  reported_path="$(awk -F': ' '/^ReportPath/{print $2; exit}' "$out_file" | tr -d '\r')"
+  if [[ -n "$reported_path" && -d "$reported_path" ]]; then
+    if [[ -f "$reported_path/report.md" || -f "$reported_path/report.json" ]]; then
+      report_path="$reported_path"
+    elif [[ ! -f "$report_path/report.md" && ! -f "$report_path/report.json" ]]; then
+      report_path="$reported_path"
+    fi
+  fi
   if [[ -z "${report_path:-}" || ! -d "$report_path" ]]; then
-    report_path="$(awk -F': ' '/^ReportPath/{print $2; exit}' "$out_file" | tr -d '\r')"
+    report_path="$reported_path"
   fi
   if [[ -z "${report_path:-}" ]]; then
     report_path="$(ls -1dt "$REPO_ROOT"/Outputs/WindowsFix_* 2>/dev/null | head -n1 || true)"
@@ -238,7 +255,13 @@ run_toolkit() {
     1) echo "[WARN] Обнаружены ошибки в шагах. Проверьте Step outcomes и report.md." ;;
     2) echo "[WARN] Для режима Repair/Full требуются права администратора. Если UAC отклонён — это ожидаемо." ;;
     3) echo "[ERROR] Непредвиденная ошибка выполнения. Смотрите toolkit.log/report.md." ;;
-    *) echo "[WARN] Неожиданный код завершения: $exit_code" ;;
+    *)
+      if grep -Eqi 'canceled by the user|операция отменена пользователем|The operation was canceled by the user' "$out_file"; then
+        echo "[WARN] UAC-повышение было отменено пользователем. Запуск прерван."
+      else
+        echo "[WARN] Неожиданный код завершения: $exit_code"
+      fi
+      ;;
   esac
 
   if [[ "$mode" == "DryRun" ]]; then
