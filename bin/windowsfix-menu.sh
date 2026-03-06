@@ -23,27 +23,54 @@ mode_requires_admin() {
 }
 
 run_elevated() {
-  local cmdline="$1"
+  local mode="$1"
+  local report_path="$2"
+  shift 2
+  local extra_flags=("$@")
 
   if ! command -v powershell.exe >/dev/null 2>&1; then
     echo "[ERROR] Для автоповышения прав требуется powershell.exe в PATH."
     return 2
   fi
 
+  local cmdline
+  cmdline=""$ENTRYPOINT" -Mode "$mode" -ReportPath "$report_path""
+
+  local i=0
+  while [[ $i -lt ${#extra_flags[@]} ]]; do
+    local token="${extra_flags[$i]}"
+    if [[ "$token" == "-ReportPath" ]]; then
+      i=$((i+2))
+      continue
+    fi
+    cmdline+=" $token"
+    i=$((i+1))
+  done
+
+  local bash_path
+  bash_path="$(command -v bash)"
+  if command -v cygpath >/dev/null 2>&1; then
+    bash_path="$(cygpath -w "$bash_path")"
+  fi
+
   local ps_file
   ps_file="$(mktemp).ps1"
   cat > "$ps_file" <<'PS'
-param([Parameter(Mandatory=$true)][string]$CmdLine)
-$p = Start-Process -FilePath "bash" -ArgumentList @('-lc', $CmdLine) -Verb RunAs -Wait -PassThru
+param(
+  [Parameter(Mandatory=$true)][string]$BashPath,
+  [Parameter(Mandatory=$true)][string]$CmdLine
+)
+$p = Start-Process -FilePath $BashPath -ArgumentList @('-lc', $CmdLine) -Verb RunAs -Wait -PassThru
 exit $p.ExitCode
 PS
 
   echo "[INFO] Запускаю повышенный процесс (UAC prompt)..."
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file" -CmdLine "$cmdline"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file" -BashPath "$bash_path" -CmdLine "$cmdline"
   local rc=$?
   rm -f "$ps_file" 2>/dev/null || true
   return $rc
 }
+
 
 spinner_run() {
   local out_file="$1"
@@ -148,14 +175,12 @@ run_toolkit() {
   out_file="$(mktemp)"
 
   if mode_requires_admin "$mode" && ! is_admin; then
-    local cmdline
-    cmdline="$(printf '%q ' "${cmd[@]}")"
+    echo "[INFO] Команды вручную вводить не нужно: запуск выполняется автоматически в elevated-процессе."
     set +e
-    run_elevated "$cmdline" >"$out_file" 2>&1
+    run_elevated "$mode" "$report_path" "${extra[@]}" >"$out_file" 2>&1
     exit_code=$?
     set -e
-    printf '[WORK] ✓ Выполнение завершено (elevated).
-'
+    printf '[WORK] ✓ Повышенный запуск завершён.\n'
   else
     set +e
     spinner_run "$out_file" "${cmd[@]}"
