@@ -31,6 +31,18 @@ log_line() {
   fi
 }
 
+should_use_timeout() {
+  local first="$1"
+  case "$first" in
+    *.exe|*.EXE) return 1 ;;
+    */*.exe|*/.exe|*\*.exe|*\*.EXE) return 1 ;;
+    cmd|cmd.exe|where|where.exe|sc|sc.exe|dism|dism.exe|nslookup|nslookup.exe|ipconfig|ipconfig.exe|netsh|netsh.exe)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 run_cmd() {
   local timeout_sec="$1"; shift
   local cmd=("$@")
@@ -40,7 +52,7 @@ run_cmd() {
 
   local out err
   out="$(mktemp)"; err="$(mktemp)"
-  if command -v timeout >/dev/null 2>&1; then
+  if command -v timeout >/dev/null 2>&1 && should_use_timeout "${cmd[0]}"; then
     if timeout "${timeout_sec}s" "${cmd[@]}" >"$out" 2>"$err"; then CMD_EXIT_CODE=0; else CMD_EXIT_CODE=$?; fi
   else
     if "${cmd[@]}" >"$out" 2>"$err"; then CMD_EXIT_CODE=0; else CMD_EXIT_CODE=$?; fi

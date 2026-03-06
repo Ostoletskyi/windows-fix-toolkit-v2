@@ -10,31 +10,27 @@ if [[ ! -f "$ENTRYPOINT" ]]; then
   exit 1
 fi
 
-P_SELFTEST=0
-P_DIAGNOSE=0
-P_REPAIR=0
-P_FULL=0
-P_DRYRUN=0
+spinner_run() {
+  local out_file="$1"
+  shift
+  local cmd=("$@")
 
-progress_bar() {
-  local pct="$1"
-  local filled=$((pct / 10))
-  local empty=$((10 - filled))
-  printf '['
-  for ((i=0; i<filled; i++)); do printf '#'; done
-  for ((i=0; i<empty; i++)); do printf '-'; done
-  printf '] %s%%' "$pct"
-}
+  "${cmd[@]}" >"$out_file" 2>&1 &
+  local pid=$!
+  local spin='|/-\\'
+  local i=0
 
-set_mode_progress() {
-  local mode="$1"
-  case "$mode" in
-    SelfTest) P_SELFTEST=100 ;;
-    Diagnose) P_DIAGNOSE=100 ;;
-    Repair) P_REPAIR=100 ;;
-    Full) P_FULL=100 ;;
-    DryRun) P_DRYRUN=100 ;;
-  esac
+  while kill -0 "$pid" 2>/dev/null; do
+    printf '\r[WORK] %c Выполняется... ' "${spin:i++%${#spin}:1}"
+    sleep 0.12
+  done
+
+  local exit_code
+  wait "$pid"
+  exit_code=$?
+
+  printf '\r[WORK] ✓ Выполнение завершено.           \n'
+  return "$exit_code"
 }
 
 print_run_summary() {
@@ -96,30 +92,18 @@ run_toolkit() {
     cmd+=("${extra[@]}")
   fi
 
-  local progress=0
   echo
   echo "[RUN] ${cmd[*]}"
-  echo -n "[PROGRESS] "
-  progress_bar "$progress"
-  echo
 
   local out_file
   out_file="$(mktemp)"
 
-  progress=20
-  echo -n "[PROGRESS] "
-  progress_bar "$progress"
-  echo "  -> starting"
-
   set +e
-  "${cmd[@]}" | tee "$out_file"
-  local exit_code=${PIPESTATUS[0]}
+  spinner_run "$out_file" "${cmd[@]}"
+  local exit_code=$?
   set -e
 
-  progress=85
-  echo -n "[PROGRESS] "
-  progress_bar "$progress"
-  echo "  -> collecting results"
+  cat "$out_file"
 
   local report_path
   report_path="$(awk -F': ' '/^ReportPath/{print $2; exit}' "$out_file" | tr -d '\r')"
@@ -129,12 +113,6 @@ run_toolkit() {
   fi
 
   print_run_summary "$mode" "$report_path" "$exit_code"
-
-  progress=100
-  set_mode_progress "$mode"
-  echo -n "[PROGRESS] "
-  progress_bar "$progress"
-  echo "  -> completed"
 
   rm -f "$out_file"
 
@@ -173,11 +151,11 @@ print_menu() {
     "Entry: $ENTRYPOINT" \
     'Runtime: bash' \
     '' \
-    "1) SelfTest  $(progress_bar "$P_SELFTEST")" \
-    "2) Diagnose  $(progress_bar "$P_DIAGNOSE")" \
-    "3) Repair (DISM CheckHealth MVP)  $(progress_bar "$P_REPAIR")" \
-    "4) Full (Diagnose + Repair + logs export)  $(progress_bar "$P_FULL")" \
-    "5) DryRun (plan only, no actions)  $(progress_bar "$P_DRYRUN")" \
+    '1) SelfTest' \
+    '2) Diagnose' \
+    '3) Repair (DISM CheckHealth MVP)' \
+    '4) Full (Diagnose + Repair + logs export)' \
+    '5) DryRun (plan only, no actions)' \
     '6) Custom mode with flags' \
     '0) Exit'
 }
