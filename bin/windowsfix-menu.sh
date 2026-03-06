@@ -213,10 +213,12 @@ run_toolkit() {
   echo "[RUN] ${cmd[*]}"
   print_mode_banner "$mode"
 
-  local out_file exit_code
+  local out_file exit_code used_elevated
   out_file="$(mktemp)"
+  used_elevated=0
 
   if mode_requires_admin "$mode" && ! is_admin; then
+    used_elevated=1
     echo "[INFO] Команды вручную вводить не нужно: запуск выполняется автоматически в elevated-процессе."
     set +e
     run_elevated "$mode" "$report_path" "${extra[@]}" >"$out_file" 2>&1
@@ -247,7 +249,7 @@ run_toolkit() {
   if [[ -z "${report_path:-}" || ! -d "$report_path" ]]; then
     report_path="$reported_path"
   fi
-  if [[ -z "${report_path:-}" ]]; then
+  if [[ ( -z "${report_path:-}" || ! -d "$report_path" ) && "$used_elevated" != "1" ]]; then
     report_path="$(ls -1dt "$REPO_ROOT"/Outputs/WindowsFix_* 2>/dev/null | head -n1 || true)"
   fi
 
@@ -255,7 +257,17 @@ run_toolkit() {
 
   case "$exit_code" in
     0) echo "[INFO] Выполнено успешно." ;;
-    1) echo "[WARN] Обнаружены ошибки в шагах. Проверьте Step outcomes и report.md." ;;
+    1)
+      local fail_count=0
+      if [[ -f "$report_path/report.md" ]]; then
+        fail_count="$(grep -cE '^- \*\*.*: FAIL \(' "$report_path/report.md" || true)"
+      fi
+      if [[ "$fail_count" == "0" ]]; then
+        echo "[WARN] Код завершения=1, но FAIL-шагов нет. Вероятна проблема elevated-launch/UAC, а не диагностики системы."
+      else
+        echo "[WARN] Обнаружены ошибки в шагах. Проверьте Step outcomes и report.md."
+      fi
+      ;;
     2) echo "[WARN] Для режима Repair/Full требуются права администратора. Если UAC отклонён — это ожидаемо." ;;
     3) echo "[ERROR] Непредвиденная ошибка выполнения. Смотрите toolkit.log/report.md." ;;
     *)
