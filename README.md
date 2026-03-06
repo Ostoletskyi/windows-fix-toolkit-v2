@@ -28,6 +28,8 @@ bash ./bin/windowsfix.sh -Mode Diagnose
 bash ./bin/windowsfix.sh -Mode DryRun
 ```
 
+- Для `Repair` и `Full` без прав администратора ожидаем `ExitCode=2` и шаг `Admin check: FAIL` (это корректное поведение, не падение меню).
+
 ## Параметры
 - `-Mode Diagnose|Repair|Full|SelfTest|DryRun`
 - `-ReportPath <path>`

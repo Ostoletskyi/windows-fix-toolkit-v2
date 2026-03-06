@@ -114,12 +114,21 @@ run_toolkit() {
 
   print_run_summary "$mode" "$report_path" "$exit_code"
 
+  case "$exit_code" in
+    0) echo "[INFO] Выполнено успешно." ;;
+    1) echo "[WARN] Обнаружены ошибки в шагах. Проверьте Step outcomes и report.md." ;;
+    2) echo "[WARN] Для режима Repair/Full требуются права администратора. Это не падение скрипта." ;;
+    3) echo "[ERROR] Непредвиденная ошибка выполнения. Смотрите toolkit.log/report.md." ;;
+    *) echo "[WARN] Неожиданный код завершения: $exit_code" ;;
+  esac
+
   rm -f "$out_file"
 
   echo
   echo "[DONE] ExitCode=$exit_code"
   echo
-  read -r -p "Press Enter to continue..." _
+  read -r -p "Press Enter to continue..." _ || true
+  return 0
 }
 
 ask_common_flags() {
