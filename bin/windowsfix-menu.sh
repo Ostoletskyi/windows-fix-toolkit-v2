@@ -140,6 +140,26 @@ print_run_summary() {
   echo "===================================="
 }
 
+
+print_mode_banner() {
+  local mode="$1"
+  case "$mode" in
+    DryRun)
+      echo "[INFO] You selected DryRun: this mode ONLY builds the action plan."
+      echo "[INFO] Real DISM/SFC/log analysis execution is NOT performed in DryRun."
+      ;;
+    Diagnose)
+      echo "[INFO] Running real diagnostics (system/service/network checks + log analysis)."
+      ;;
+    Repair)
+      echo "[INFO] Running real repair pipeline (DISM + optional SFC), may take time."
+      ;;
+    Full)
+      echo "[INFO] Running full pipeline: Diagnose + Repair + log collection/analysis."
+      ;;
+  esac
+}
+
 run_toolkit() {
   local mode="$1"
   shift
@@ -170,6 +190,7 @@ run_toolkit() {
 
   echo
   echo "[RUN] ${cmd[*]}"
+  print_mode_banner "$mode"
 
   local out_file exit_code
   out_file="$(mktemp)"
@@ -206,6 +227,11 @@ run_toolkit() {
     3) echo "[ERROR] Непредвиденная ошибка выполнения. Смотрите toolkit.log/report.md." ;;
     *) echo "[WARN] Неожиданный код завершения: $exit_code" ;;
   esac
+
+  if [[ "$mode" == "DryRun" ]]; then
+    echo "[NEXT] To run REAL diagnostics choose option 2 (Diagnose)."
+    echo "[NEXT] To run REAL repairs choose option 3 (Repair) or 4 (Full)."
+  fi
 
   rm -f "$out_file"
 
@@ -250,7 +276,7 @@ print_menu() {
     '2) Diagnose' \
     '3) Repair (DISM CheckHealth + ScanHealth + SFC)' \
     '4) Full (Diagnose + Repair + logs export)' \
-    '5) DryRun (plan only, no actions)' \
+    '5) DryRun (preview only, no real system changes)' \
     '6) Custom mode with flags' \
     '0) Exit'
 }

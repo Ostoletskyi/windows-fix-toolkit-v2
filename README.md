@@ -31,6 +31,10 @@ bash ./bin/windowsfix.sh -Mode DryRun
 - Для `Repair` и `Full` без прав администратора ожидаем `ExitCode=2` и шаг `Admin check: FAIL` (это корректное поведение, не падение меню).
 
 
+
+> Важно: `DryRun` — это только предпросмотр плана. Поэтому шаги ремонта и анализа в нём будут `SKIPPED` по дизайну.
+> Для реального выполнения используйте `Diagnose`, `Repair` или `Full`.
+
 ## Где сканирование системы
 Сканирование выполняется в режиме `Repair` и `Full`:
 1. `dism.exe /Online /Cleanup-Image /CheckHealth`
