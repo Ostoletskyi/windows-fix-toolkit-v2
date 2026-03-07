@@ -1,0 +1,15 @@
+# Reports and runtime artifacts
+Outputs/
+*.log
+*.tmp
+*.bak
+*.cache
+
+# PowerShell and editor
+*.psd1
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
