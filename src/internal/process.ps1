@@ -48,11 +48,12 @@ function Invoke-ExternalCommand {
     $null = $proc.Start()
 
     $timedOut = $false
-    $uiTickMs = 200
+    $uiTickMs = 120
     $lastHeartbeatSec = -1
     $spinnerFrames = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
     $spinnerIndex = 0
     $interactive = -not [Console]::IsOutputRedirected
+    $displayCmd = if ($cmdline.Length -gt 64) { $cmdline.Substring(0,61) + '...' } else { $cmdline }
 
     while (-not $proc.WaitForExit($uiTickMs)) {
         $elapsedSec = [int]$sw.Elapsed.TotalSeconds
@@ -60,7 +61,7 @@ function Invoke-ExternalCommand {
         if ($interactive) {
             $frame = $spinnerFrames[$spinnerIndex % $spinnerFrames.Count]
             $spinnerIndex++
-            Write-Host -NoNewline ("`r[WORK {0}] {1} elapsed={2}s    " -f $frame, $cmdline, $elapsedSec)
+            Write-Host -NoNewline ("`r[WORK {0}] {1}  t={2}s   " -f $frame, $displayCmd, $elapsedSec)
         }
 
         if ($State -and ($lastHeartbeatSec -lt 0 -or ($elapsedSec - $lastHeartbeatSec) -ge $HeartbeatSec)) {

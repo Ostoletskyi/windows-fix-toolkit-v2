@@ -13,7 +13,8 @@ param(
     [ValidateSet('Quick','Normal','Deep')]
     [string]$RepairProfile = 'Normal',
     [ValidateSet('Quick','Normal','Deep')]
-    [string]$DiagnoseProfile = 'Normal'
+    [string]$DiagnoseProfile = 'Normal',
+    [switch]$UiVerbose
 )
 
 Set-StrictMode -Version Latest
@@ -38,16 +39,14 @@ Import-Module $modulePath -Force
 
 $meta = @(
     "SCRIPT_BUILD    : WindowsFixToolkit-PS v2.0.0",
-    "ScriptPath      : $($MyInvocation.MyCommand.Path)",
-    "PWD             : $(Get-Location)",
-    "PSVersion       : $($PSVersionTable.PSVersion)",
     "Mode            : $Mode",
     "ReportPath      : $ReportPath",
-    "ToolkitLogPath  : $LogPath",
-    "TranscriptPath  : $TranscriptPath"
+    "ToolkitLogPath  : $LogPath"
 )
-$meta | Tee-Object -FilePath $TranscriptPath -Append
+$meta | Tee-Object -FilePath $TranscriptPath -Append | Out-Null
+Write-Host "[START] $Mode | profile: diag=$DiagnoseProfile repair=$RepairProfile"
+Write-Host "[REPORT] $ReportPath"
 
-$exitCode = Invoke-WindowsFix -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile
+$exitCode = Invoke-WindowsFix -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile -UiVerbose:$UiVerbose
 "ExitCode=$exitCode" | Tee-Object -FilePath $TranscriptPath -Append | Out-Null
 exit $exitCode

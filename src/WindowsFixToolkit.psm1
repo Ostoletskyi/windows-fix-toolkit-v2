@@ -24,7 +24,8 @@ function New-ToolkitState {
         [ValidateSet('Quick','Normal','Deep')]
         [string]$RepairProfile = 'Normal',
         [ValidateSet('Quick','Normal','Deep')]
-        [string]$DiagnoseProfile = 'Normal'
+        [string]$DiagnoseProfile = 'Normal',
+        [switch]$UiVerbose
     )
 
     New-Item -ItemType Directory -Path $ReportPath -Force | Out-Null
@@ -47,6 +48,7 @@ function New-ToolkitState {
         SubsystemProfile = $SubsystemProfile
         RepairProfile = $RepairProfile
         DiagnoseProfile = $DiagnoseProfile
+        UiVerbose = [bool]$UiVerbose
         StartedAt      = (Get-Date)
         IsAdmin        = (Test-IsAdmin)
         Stages         = New-Object System.Collections.Generic.List[object]
@@ -503,10 +505,11 @@ function Invoke-WindowsFix {
         [ValidateSet('Quick','Normal','Deep')]
         [string]$RepairProfile = 'Normal',
         [ValidateSet('Quick','Normal','Deep')]
-        [string]$DiagnoseProfile = 'Normal'
+        [string]$DiagnoseProfile = 'Normal',
+        [switch]$UiVerbose
     )
 
-    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile
+    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile -UiVerbose:$UiVerbose
     Write-ToolkitLog -State $state -Message "Mode=$Mode, EffectiveMode=$($state.EffectiveMode), IsAdmin=$($state.IsAdmin), ReportPath=$ReportPath"
 
     $exitCode = 0

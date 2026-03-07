@@ -12,11 +12,25 @@ function Write-ToolkitLog {
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     $line = "[$timestamp][$Level] $Message"
 
-    switch ($Level) {
-        'ERROR' { Write-Host $line -ForegroundColor Red }
-        'WARN'  { Write-Host $line -ForegroundColor Yellow }
-        'DEBUG' { Write-Verbose $line }
-        default { Write-Host $line }
+    $uiVerbose = $false
+    if ($State.PSObject.Properties.Name -contains 'UiVerbose') {
+        $uiVerbose = [bool]$State.UiVerbose
+    }
+
+    $printToConsole = $true
+    if ($Level -eq 'DEBUG') { $printToConsole = $uiVerbose }
+    elseif ($Level -eq 'INFO') {
+        if (-not $uiVerbose) { $printToConsole = $false }
+        if ($Message -like '[HEARTBEAT]*' -or $Message -like '>> *') { $printToConsole = $false }
+    }
+
+    if ($printToConsole) {
+        switch ($Level) {
+            'ERROR' { Write-Host $line -ForegroundColor Red }
+            'WARN'  { Write-Host $line -ForegroundColor Yellow }
+            'DEBUG' { Write-Verbose $line }
+            default { Write-Host $line }
+        }
     }
 
     $targetLog = $State.LogPath

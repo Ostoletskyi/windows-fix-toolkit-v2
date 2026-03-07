@@ -51,6 +51,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bin\windowsfix.ps1 -Mo
 - `-Force`
 - `-RepairProfile Quick|Normal|Deep`
 - `-DiagnoseProfile Quick|Normal|Deep`
+- `-UiVerbose`
 
 ## Меню
 ```bash
@@ -76,7 +77,7 @@ Bash оставлен как launcher-меню. Диагностика и рем
 - Чистое меню без лишних индикаторов (пункты 1–6 + 0).
 - Анимация выполнения во время запуска (вращающаяся палочка `|/-\`).
 
-- В основном окне выполнения (включая elevated-окно) показывается пошаговый прогресс и heartbeat-спиннер для длинных команд (`[HEARTBEAT | / - \]`).
+- В основном окне выполнения (включая elevated-окно) показывается живой однострочный спинер с таймером (`[WORK ⠋..] t=Ns`), без засорения консоли heartbeat-строками.
 - Сводка результата после каждого запуска:
   - Mode, ExitCode, ReportPath
   - Количество шагов (OK/WARN/FAIL/SKIPPED)

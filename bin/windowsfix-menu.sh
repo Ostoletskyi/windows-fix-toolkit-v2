@@ -352,6 +352,9 @@ ask_common_flags() {
   read -r -p "Add -Force? (y/N): " ans
   [[ "${ans,,}" == "y" ]] && flags+=("-Force")
 
+  read -r -p "Show verbose console logs? (y/N): " ans
+  [[ "${ans,,}" == "y" ]] && flags+=("-UiVerbose")
+
   read -r -p "RepairProfile (Quick/Normal/Deep, default Normal): " repair_profile
   case "${repair_profile:-}" in
     Quick|Normal|Deep) flags+=("-RepairProfile" "$repair_profile") ;;
