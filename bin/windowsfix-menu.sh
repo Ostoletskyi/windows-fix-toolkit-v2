@@ -54,6 +54,11 @@ run_elevated() {
     i=$((i+1))
   done
 
+  local extra_raw=""
+  if [[ ${#filtered_flags[@]} -gt 0 ]]; then
+    extra_raw="$(printf '%s\n' "${filtered_flags[@]}")"
+  fi
+
   local ep="$ENTRYPOINT"
   if command -v cygpath >/dev/null 2>&1; then
     ep="$(cygpath -w "$ep")"
@@ -66,16 +71,21 @@ param(
   [Parameter(Mandatory=$true)][string]$EntryPoint,
   [Parameter(Mandatory=$true)][string]$Mode,
   [Parameter(Mandatory=$true)][string]$ReportPath,
-  [string[]]$ExtraArgs
+  [string]$ExtraArgsRaw = ""
 )
 $argList = @('-NoProfile','-ExecutionPolicy','Bypass','-File', $EntryPoint, '-Mode', $Mode, '-ReportPath', $ReportPath)
-if ($ExtraArgs) { $argList += $ExtraArgs }
+if ($ExtraArgsRaw) {
+  $extra = $ExtraArgsRaw -split "`n" | Where-Object { $_ -ne '' }
+  if ($extra.Count -gt 0) {
+    $argList += $extra
+  }
+}
 $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs -Wait -PassThru
 exit $p.ExitCode
 PS
 
   echo "[INFO] Запускаю повышенный процесс (UAC prompt)..."
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file" -EntryPoint "$ep" -Mode "$mode" -ReportPath "$report_path" -ExtraArgs $filtered_flags
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file" -EntryPoint "$ep" -Mode "$mode" -ReportPath "$report_path" -ExtraArgsRaw "$extra_raw"
   local rc=$?
   rm -f "$ps_file" 2>/dev/null || true
   return $rc
