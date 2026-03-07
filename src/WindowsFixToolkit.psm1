@@ -353,7 +353,7 @@ function Run-StageSystemFileRepair {
     elseif ($sfc.StdOut -match 'found corrupt files and successfully repaired') { $normalized = 'WARN'; $stage.findings.Add('SFC repaired some files.') }
     elseif ($sfc.StdOut -match 'found corrupt files but was unable to fix') { $normalized = 'FAIL'; $stage.recommendations.Add('Unrepaired corruption remains. Review CBS.log and rerun DISM/SFC.') }
     elseif ($sfc.StdOut -match 'could not perform the requested operation') { $normalized = 'FAIL'; $stage.recommendations.Add('SFC could not run; verify servicing readiness and disk health.') }
-    elseif ($sfc.ExitCode -eq 0) { $normalized = 'WARN' }
+    elseif ($sfc.ExitCode -eq 0) { $normalized = 'OK'; $stage.findings.Add('SFC completed with exit code 0 (native console mode).') }
     else { $normalized = 'FAIL' }
 
     Add-ActionResult -Stage $stage -Name 'SFC /scannow' -Result $sfc -InterpretedStatus $normalized

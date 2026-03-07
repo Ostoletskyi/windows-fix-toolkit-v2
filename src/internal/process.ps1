@@ -60,9 +60,9 @@ function Invoke-ExternalCommand {
             Write-Host "[WORK] Launching service command in a separate console window: $displayCmd"
         }
 
-        $tmpOut = Join-Path ([System.IO.Path]::GetTempPath()) ("windowsfix_{0}.log" -f ([guid]::NewGuid().ToString('N')))
-        $innerCmd = "$cmdline > `"$tmpOut`" 2>&1"
-        $proc = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $innerCmd) -PassThru -NoNewWindow:$false -WindowStyle Normal
+        # IMPORTANT: launch the real tool directly (no cmd.exe/powershell.exe wrapper),
+        # so the PID we monitor is the same process that performs servicing.
+        $proc = Start-Process -FilePath $FilePath -ArgumentList $argsClean -PassThru -NoNewWindow:$false -WindowStyle Normal
 
         while (-not $proc.HasExited) {
             Start-Sleep -Milliseconds $uiTickMs
@@ -76,7 +76,7 @@ function Invoke-ExternalCommand {
 
             if ($State -and ($lastHeartbeatSec -lt 0 -or ($elapsedSec - $lastHeartbeatSec) -ge $HeartbeatSec)) {
                 $lastHeartbeatSec = $elapsedSec
-                Write-ToolkitLog -State $State -Message "[HEARTBEAT] still running: $cmdline elapsed=${elapsedSec}s"
+                Write-ToolkitLog -State $State -Message "[HEARTBEAT] still running: pid=$($proc.Id) cmd=$cmdline elapsed=${elapsedSec}s"
             }
 
             if ($sw.Elapsed.TotalSeconds -ge $TimeoutSec) {
@@ -95,10 +95,10 @@ function Invoke-ExternalCommand {
             $exitCode = 124
         }
 
-        if (Test-Path $tmpOut) {
-            $stdout = (Get-Content -Raw -Path $tmpOut -ErrorAction SilentlyContinue)
-            Remove-Item -Path $tmpOut -Force -ErrorAction SilentlyContinue
-        }
+        # No stdout/stderr redirection for native servicing commands: avoid altering
+        # tool console behavior and keep native progress UI responsive.
+        $stdout = ''
+        $stderr = ''
     }
     else {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
