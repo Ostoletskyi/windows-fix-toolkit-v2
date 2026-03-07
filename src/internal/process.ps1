@@ -62,9 +62,14 @@ function Invoke-ExternalCommand {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $stdout = ''
     $stderr = ''
-    $exitCode = 0
+    $exitCode = $null
+    $launchMode = 'InlineCaptured'
+    $stdoutPath = $null
+    $stderrPath = $null
+    $processId = $null
 
     if (Test-UseSeparateServiceWindow -FilePath $FilePath) {
+        $launchMode = 'NativeConsole'
         if ($interactive) {
             Write-Host "[WORK] Launching service command in a separate console window: $displayCmd"
         }
@@ -73,6 +78,7 @@ function Invoke-ExternalCommand {
         # so the PID we monitor is the same process that performs servicing.
         $servicePath = if ($resolvedCmd.Source) { $resolvedCmd.Source } else { $FilePath }
         $proc = Start-Process -FilePath $servicePath -ArgumentList $argsClean -PassThru -NoNewWindow:$false -WindowStyle Normal
+        $processId = $proc.Id
 
         while (-not $proc.HasExited) {
             Start-Sleep -Milliseconds $uiTickMs
@@ -99,8 +105,12 @@ function Invoke-ExternalCommand {
         if ($interactive) { Write-Host "" }
 
         if (-not $timedOut) {
-            try { Wait-Process -Id $proc.Id -ErrorAction SilentlyContinue } catch {}
+            try { $proc.WaitForExit() } catch {}
+            try { $proc.Refresh() } catch {}
             $exitCode = $proc.ExitCode
+            if ($null -eq $exitCode) {
+                $exitCode = -1
+            }
         } else {
             $exitCode = 124
         }
@@ -122,6 +132,7 @@ function Invoke-ExternalCommand {
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
         $null = $proc.Start()
+        $processId = $proc.Id
 
         while (-not $proc.WaitForExit($uiTickMs)) {
             $elapsedSec = [int]$sw.Elapsed.TotalSeconds
@@ -150,6 +161,7 @@ function Invoke-ExternalCommand {
         $stderr = $proc.StandardError.ReadToEnd()
         if (-not $timedOut) { $null = $proc.WaitForExit() }
         $exitCode = if ($timedOut) { 124 } else { $proc.ExitCode }
+        if ($null -eq $exitCode) { $exitCode = -1 }
     }
 
     $sw.Stop()
@@ -163,13 +175,18 @@ function Invoke-ExternalCommand {
         Arguments   = $argsClean
         CommandLine = $cmdline
         ExitCode    = $exitCode
+        ExitCodeCaptured = ($null -ne $exitCode -and $exitCode -ne -1)
+        ProcessId   = $processId
+        LaunchMode  = $launchMode
+        StdOutPath  = $stdoutPath
+        StdErrPath  = $stderrPath
         StdOut      = $stdout.Trim()
         StdErr      = $stderr.Trim()
         DurationMs  = [int]$sw.ElapsedMilliseconds
         TimedOut    = $timedOut
         StartedAt   = $startTime
         EndedAt     = $endTime
-        Success     = (-not $timedOut -and $exitCode -eq 0)
+        Success     = (-not $timedOut -and $exitCode -eq 0 -and $exitCode -ne -1)
     }
 
     if (-not $IgnoreExitCode -and -not $result.Success) {

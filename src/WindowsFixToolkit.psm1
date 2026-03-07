@@ -95,9 +95,14 @@ function Add-ActionResult {
     $Stage.actions.Add([pscustomobject]@{
         name = $Name
         commandLine = $Result.CommandLine
+        process_id = $Result.ProcessId
+        launch_mode = $Result.LaunchMode
         exit_code = $Result.ExitCode
+        exit_code_captured = $Result.ExitCodeCaptured
         duration_ms = $Result.DurationMs
         timed_out = $Result.TimedOut
+        stdout_path = $Result.StdOutPath
+        stderr_path = $Result.StdErrPath
         status = $InterpretedStatus
         stdout = $Result.StdOut
         stderr = $Result.StdErr
@@ -199,8 +204,21 @@ function Run-StageSnapshot {
                 $svc = Get-Service -Name $_ -ErrorAction Stop
                 [pscustomobject]@{ name=$svc.Name; status=$svc.Status.ToString(); startType=$svc.StartType.ToString() }
             }
+        $osRaw = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+        $osNorm = if ($osRaw) {
+            [pscustomobject]@{
+                Caption = $osRaw.Caption
+                Version = $osRaw.Version
+                BuildNumber = $osRaw.BuildNumber
+                OSArchitecture = $osRaw.OSArchitecture
+                LastBootUpTime = $osRaw.LastBootUpTime
+                SystemDrive = $osRaw.SystemDrive
+                MUILanguages = @($osRaw.MUILanguages)
+            }
+        } else { $null }
+
         $snap = [pscustomobject]@{
-            os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+            os = $osNorm
             services = $services
             adapters = Get-NetAdapter -ErrorAction SilentlyContinue | Select-Object Name, Status, LinkSpeed
         }
@@ -245,9 +263,12 @@ function Run-StageEnvironmentValidation {
         $stage.findings.Add('Quick diagnose profile skips DISM CheckHealth baseline for speed.')
     } else {
         $dismCheck = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
-        $dismStatus = if ($dismCheck.ExitCode -eq 0) { 'OK' } else { 'WARN' }
+        $dismStatus = if (-not $dismCheck.ExitCodeCaptured) { 'WARN' } elseif ($dismCheck.ExitCode -eq 0) { 'OK' } else { 'WARN' }
         Add-ActionResult -Stage $stage -Name 'DISM CheckHealth baseline' -Result $dismCheck -InterpretedStatus $dismStatus
         $stage.findings.Add("DISM CheckHealth baseline exit=$($dismCheck.ExitCode)")
+        if (-not $dismCheck.ExitCodeCaptured) {
+            $stage.recommendations.Add('DISM baseline finished but exit code was not captured reliably.')
+        }
 
         if ($dismCheck.StdOut -match 'repairable|corruption|component store') {
             $stage.recommendations.Add('Component store issues indicated; proceed with servicing readiness + DISM repair stages.')
@@ -257,6 +278,14 @@ function Run-StageEnvironmentValidation {
     $diskErr = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7,51,55,153} -MaxEvents 30 -ErrorAction SilentlyContinue
     if ($diskErr) {
         $stage.findings.Add('Disk error indicators found in System log.')
+        $details = $diskErr | Select-Object TimeCreated, Id, ProviderName, LevelDisplayName, Message
+        $diskPath = Join-Path $State.ReportPath 'disk-indicators.json'
+        $details | ConvertTo-Json -Depth 6 | Set-Content -Path $diskPath -Encoding UTF8
+        $stage.artifacts.Add($diskPath)
+        $sample = $details | Select-Object -First 3
+        foreach ($d in $sample) {
+            $stage.findings.Add("DiskEvent id=$($d.Id) provider=$($d.ProviderName)")
+        }
         $stage.recommendations.Add('Run CHKDSK before deep component/system repair.')
     }
 
@@ -325,7 +354,8 @@ function Run-StageComponentStoreRepair {
     }
 
     $check = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
-    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth' -Result $check -InterpretedStatus ($(if($check.ExitCode -eq 0){'OK'}else{'WARN'}))
+    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth' -Result $check -InterpretedStatus ($(if(-not $check.ExitCodeCaptured){'WARN'}elseif($check.ExitCode -eq 0){'OK'}else{'WARN'}))
+    if (-not $check.ExitCodeCaptured) { $stage.recommendations.Add('DISM CheckHealth exit code was not captured; result verification is limited.') }
 
     if ($State.RepairProfile -eq 'Quick') {
         $stage.actions.Add([pscustomobject]@{ name='DISM ScanHealth'; status='SKIPPED'; reason='RepairProfile=Quick'; exit_code=0; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /ScanHealth'; stdout=''; stderr='' })
@@ -333,7 +363,7 @@ function Run-StageComponentStoreRepair {
         $stage.recommendations.Add('Quick profile skips ScanHealth/RestoreHealth for faster run. Use RepairProfile=Normal or Deep for full servicing repair.')
     } else {
         $scan = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/ScanHealth') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode
-        Add-ActionResult -Stage $stage -Name 'DISM ScanHealth' -Result $scan -InterpretedStatus ($(if($scan.ExitCode -eq 0){'OK'}else{'FAIL'}))
+        Add-ActionResult -Stage $stage -Name 'DISM ScanHealth' -Result $scan -InterpretedStatus ($(if(-not $scan.ExitCodeCaptured){'WARN'}elseif($scan.ExitCode -eq 0){'OK'}else{'FAIL'}))
 
         $needRestore = $true
         if ($scan.ExitCode -eq 0 -and $scan.StdOut -match 'No component store corruption detected' -and $State.RepairProfile -eq 'Normal') {
@@ -343,15 +373,17 @@ function Run-StageComponentStoreRepair {
 
         if ($needRestore) {
             $restore = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
-            Add-ActionResult -Stage $stage -Name 'DISM RestoreHealth' -Result $restore -InterpretedStatus ($(if($restore.ExitCode -eq 0){'OK'}else{'FAIL'}))
+            Add-ActionResult -Stage $stage -Name 'DISM RestoreHealth' -Result $restore -InterpretedStatus ($(if(-not $restore.ExitCodeCaptured){'WARN'}elseif($restore.ExitCode -eq 0){'OK'}else{'FAIL'}))
         }
     }
 
     $verify = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
-    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth verify' -Result $verify -InterpretedStatus ($(if($verify.ExitCode -eq 0){'OK'}else{'WARN'}))
+    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth verify' -Result $verify -InterpretedStatus ($(if(-not $verify.ExitCodeCaptured){'WARN'}elseif($verify.ExitCode -eq 0){'OK'}else{'WARN'}))
 
     $hasFail = @($stage.actions | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0
-    Complete-Stage -State $State -Stage $stage -Status ($(if($hasFail){'FAIL'}elseif($verify.ExitCode -ne 0){'WARN'}else{'OK'})) -ExitCode ($(if($hasFail){1}else{0}))
+    $hasUnverified = @($stage.actions | Where-Object { $_.exit_code_captured -eq $false }).Count -gt 0
+    $stageStatus = if ($hasFail) { 'FAIL' } elseif ($hasUnverified -or $verify.ExitCode -ne 0) { 'WARN' } else { 'OK' }
+    Complete-Stage -State $State -Stage $stage -Status $stageStatus -ExitCode ($(if($hasFail){1}else{0}))
     return ($(if($hasFail){1}else{0}))
 }
 
@@ -380,7 +412,8 @@ function Run-StageSystemFileRepair {
     Write-Host '[WORK] Running SFC scan in a separate console window...'
     $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
     $normalized = 'WARN'
-    if ($sfc.StdOut -match 'did not find any integrity violations') { $normalized = 'OK' }
+    if (-not $sfc.ExitCodeCaptured) { $normalized = 'WARN'; $stage.recommendations.Add('SFC exit code was not captured reliably; verify via CBS.log and rerun if needed.') }
+    elseif ($sfc.StdOut -match 'did not find any integrity violations') { $normalized = 'OK' }
     elseif ($sfc.StdOut -match 'found corrupt files and successfully repaired') { $normalized = 'WARN'; $stage.findings.Add('SFC repaired some files.') }
     elseif ($sfc.StdOut -match 'found corrupt files but was unable to fix') { $normalized = 'FAIL'; $stage.recommendations.Add('Unrepaired corruption remains. Review CBS.log and rerun DISM/SFC.') }
     elseif ($sfc.StdOut -match 'could not perform the requested operation') { $normalized = 'FAIL'; $stage.recommendations.Add('SFC could not run; verify servicing readiness and disk health.') }
@@ -445,7 +478,7 @@ function Run-StagePostValidation {
     $stage = New-Stage 'H' 'Post-repair validation'
 
     $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
-    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth post' -Result $dism -InterpretedStatus ($(if($dism.ExitCode -eq 0){'OK'}else{'WARN'}))
+    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth post' -Result $dism -InterpretedStatus ($(if(-not $dism.ExitCodeCaptured){'WARN'}elseif($dism.ExitCode -eq 0){'OK'}else{'WARN'}))
 
     $critical = 'TrustedInstaller','wuauserv','bits','cryptsvc' | ForEach-Object {
         $svc = Get-Service -Name $_ -ErrorAction SilentlyContinue
@@ -455,7 +488,7 @@ function Run-StagePostValidation {
     $critical | ConvertTo-Json -Depth 4 | Set-Content -Path $criticalPath -Encoding UTF8
     $stage.artifacts.Add($criticalPath)
 
-    $status = if ($dism.ExitCode -eq 0) { 'OK' } else { 'WARN' }
+    $status = if (-not $dism.ExitCodeCaptured) { 'WARN' } elseif ($dism.ExitCode -eq 0) { 'OK' } else { 'WARN' }
     Complete-Stage -State $State -Stage $stage -Status $status -ExitCode 0
     return 0
 }
@@ -466,12 +499,14 @@ function Run-StageFinalSummary {
 
     $failed = @($State.Stages | Where-Object { $_.status -eq 'FAIL' }).Count
     $warned = @($State.Stages | Where-Object { $_.status -eq 'WARN' }).Count
-    $stage.findings.Add("stages_failed=$failed; stages_warn=$warned")
+    $overallPipelineStatus = if ($failed -gt 0) { 'FAIL' } elseif ($warned -gt 0) { 'WARN' } else { 'OK' }
+    $stage.findings.Add("overall_pipeline_status=$overallPipelineStatus; stages_failed=$failed; stages_warn=$warned")
 
     $rebootRec = $State.Context['pending_reboot']
     if ($rebootRec) { $stage.recommendations.Add('Reboot recommended.') }
 
-    Complete-Stage -State $State -Stage $stage -Status ($(if($failed -gt 0){'FAIL'}elseif($warned -gt 0){'WARN'}else{'OK'})) -ExitCode ($(if($failed -gt 0){1}else{0}))
+    # Stage I reflects summary generation itself (not previous repair health).
+    Complete-Stage -State $State -Stage $stage -Status 'OK' -ExitCode 0
     return 0
 }
 
@@ -490,6 +525,7 @@ function Export-ToolkitReport {
         isAdmin   = $State.IsAdmin
         repairRan = ($State.EffectiveMode -in @('Repair','Full') -and -not $State.IsDryRun)
         reportExported = $true
+        overallPipelineStatus = $(if(@($State.Stages | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0){'FAIL'}elseif(@($State.Stages | Where-Object { $_.status -eq 'WARN' }).Count -gt 0){'WARN'}else{'OK'})
         logPath   = $State.LogPath
         transcriptPath = $State.TranscriptPath
         stages    = $State.Stages
@@ -506,6 +542,7 @@ function Export-ToolkitReport {
         "- IsAdmin: $($State.IsAdmin)",
         "- StartedAt: $($State.StartedAt)",
         "- RepairRan: $($payload.repairRan)",
+        "- OverallPipelineStatus: $($payload.overallPipelineStatus)",
         '',
         '## Stages'
     )
