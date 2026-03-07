@@ -346,6 +346,7 @@ function Run-StageSystemFileRepair {
         return 0
     }
 
+    Write-Host '[WORK] Running SFC scan in a separate console window...'
     $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
     $normalized = 'WARN'
     if ($sfc.StdOut -match 'did not find any integrity violations') { $normalized = 'OK' }
@@ -356,6 +357,9 @@ function Run-StageSystemFileRepair {
     else { $normalized = 'FAIL' }
 
     Add-ActionResult -Stage $stage -Name 'SFC /scannow' -Result $sfc -InterpretedStatus $normalized
+    if ($normalized -eq 'OK') { Write-Host '[OK] SFC completed successfully' }
+    elseif ($normalized -eq 'WARN') { Write-Host '[WARN] SFC completed but requires attention' -ForegroundColor Yellow }
+    else { Write-Host '[FAIL] SFC failed' -ForegroundColor Red }
     Complete-Stage -State $State -Stage $stage -Status $normalized -ExitCode ($(if($normalized -eq 'FAIL'){1}else{0}))
     return ($(if($normalized -eq 'FAIL'){1}else{0}))
 }
