@@ -104,6 +104,15 @@ function Add-ActionResult {
     })
 }
 
+function Get-MissingTools {
+    param([string[]]$Tools)
+    $missing = @()
+    foreach ($t in $Tools) {
+        if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { $missing += $t }
+    }
+    return $missing
+}
+
 function Test-ReportPathWritable {
     param([string]$Path)
     try {
@@ -163,10 +172,8 @@ function Run-StagePreflight {
     }
 
     $toolList = 'dism','sfc','chkdsk','sc','reg','netsh','wevtutil'
-    $missing = @()
-    foreach ($t in $toolList) {
-        if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { $missing += $t }
-    }
+    $missing = @(Get-MissingTools -Tools $toolList)
+    $State.Context['missing_tools'] = @($missing)
     if ($missing.Count -gt 0) {
         $stage.findings.Add("Missing tools: $($missing -join ', ')")
     }
@@ -225,6 +232,14 @@ function Run-StageEnvironmentValidation {
     $stage.findings.Add("DiagnoseProfile=$($State.DiagnoseProfile)")
 
     $dismCheck = $null
+    $missingTools = @($State.Context['missing_tools'])
+    if ($missingTools -contains 'dism') {
+        $stage.actions.Add([pscustomobject]@{ name='DISM CheckHealth baseline'; status='FAIL'; reason='DISM is unavailable'; exit_code=127; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /CheckHealth'; stdout=''; stderr='dism not found' })
+        $stage.findings.Add('DISM is unavailable; servicing diagnostics are limited.')
+        Complete-Stage -State $State -Stage $stage -Status 'WARN' -ExitCode 0
+        return 0
+    }
+
     if ($State.DiagnoseProfile -eq 'Quick') {
         $stage.actions.Add([pscustomobject]@{ name='DISM CheckHealth baseline'; status='SKIPPED'; reason='DiagnoseProfile=Quick'; exit_code=0; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /CheckHealth'; stdout=''; stderr='' })
         $stage.findings.Add('Quick diagnose profile skips DISM CheckHealth baseline for speed.')
@@ -301,6 +316,14 @@ function Run-StageComponentStoreRepair {
 
     $stage.findings.Add("RepairProfile=$($State.RepairProfile)")
 
+    $missingTools = @($State.Context['missing_tools'])
+    if ($missingTools -contains 'dism') {
+        $stage.findings.Add('DISM is unavailable; component store repair cannot run.')
+        $stage.recommendations.Add('Restore DISM availability (servicing stack) and rerun repair.')
+        Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 1
+        return 1
+    }
+
     $check = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
     Add-ActionResult -Stage $stage -Name 'DISM CheckHealth' -Result $check -InterpretedStatus ($(if($check.ExitCode -eq 0){'OK'}else{'WARN'}))
 
@@ -346,6 +369,14 @@ function Run-StageSystemFileRepair {
         return 0
     }
 
+    $missingTools = @($State.Context['missing_tools'])
+    if ($missingTools -contains 'sfc') {
+        $stage.findings.Add('SFC is unavailable; system file repair cannot run.')
+        $stage.recommendations.Add('Restore sfc.exe availability and rerun stage F.')
+        Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 1
+        return 1
+    }
+
     Write-Host '[WORK] Running SFC scan in a separate console window...'
     $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
     $normalized = 'WARN'
@@ -353,7 +384,7 @@ function Run-StageSystemFileRepair {
     elseif ($sfc.StdOut -match 'found corrupt files and successfully repaired') { $normalized = 'WARN'; $stage.findings.Add('SFC repaired some files.') }
     elseif ($sfc.StdOut -match 'found corrupt files but was unable to fix') { $normalized = 'FAIL'; $stage.recommendations.Add('Unrepaired corruption remains. Review CBS.log and rerun DISM/SFC.') }
     elseif ($sfc.StdOut -match 'could not perform the requested operation') { $normalized = 'FAIL'; $stage.recommendations.Add('SFC could not run; verify servicing readiness and disk health.') }
-    elseif ($sfc.ExitCode -eq 0) { $normalized = 'WARN' }
+    elseif ($sfc.ExitCode -eq 0) { $normalized = 'OK'; $stage.findings.Add('SFC completed with exit code 0 (native console mode).') }
     else { $normalized = 'FAIL' }
 
     Add-ActionResult -Stage $stage -Name 'SFC /scannow' -Result $sfc -InterpretedStatus $normalized
