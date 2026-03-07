@@ -63,6 +63,7 @@ function New-Stage {
         findings = New-Object System.Collections.Generic.List[string]
         recommendations = New-Object System.Collections.Generic.List[string]
         artifacts = New-Object System.Collections.Generic.List[string]
+        duration_ms = 0
     }
 }
 
@@ -71,6 +72,7 @@ function Complete-Stage {
     $Stage.status = $Status
     $Stage.exit_code = $ExitCode
     $Stage.end_time = Get-Date
+    $Stage.duration_ms = [int](($Stage.end_time - $Stage.start_time).TotalMilliseconds)
     $State.Stages.Add($Stage)
     $State.Steps.Add([pscustomobject]@{ name=$Stage.stage_name; status=$Status; exitCode=$ExitCode; durationMs=[int](($Stage.end_time-$Stage.start_time).TotalMilliseconds); details=($Stage.findings -join ' | ') })
 }
@@ -449,7 +451,7 @@ function Export-ToolkitReport {
         '## Stages'
     )
     foreach ($st in $State.Stages) {
-        $lines += "- **[$($st.stage_id)] $($st.stage_name)**: $($st.status) (exit=$($st.exit_code))"
+        $lines += "- **[$($st.stage_id)] $($st.stage_name)**: $($st.status) (exit=$($st.exit_code), $($st.duration_ms)ms)"
         foreach ($f in $st.findings) { $lines += "  - $f" }
         foreach ($r in $st.recommendations) { $lines += "  - Recommendation: $r" }
         foreach ($a in $st.artifacts) { $lines += "  - Artifact: $a" }

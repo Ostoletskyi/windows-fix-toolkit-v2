@@ -164,6 +164,38 @@ print_run_summary() {
 }
 
 
+
+print_stage_plan() {
+  local mode="$1"
+  local effective="$mode"
+  [[ "$mode" == "DryRun" ]] && effective="Full"
+
+  echo "[PLAN] Ordered stages:"
+  echo "  A) Preflight"
+  echo "  B) Snapshot"
+  echo "  C) Environment validation"
+
+  if [[ "$effective" == "Diagnose" ]]; then
+    echo "  D) Permission / servicing readiness (SKIPPED in Diagnose)"
+    echo "  E) Component store repair (SKIPPED in Diagnose)"
+    echo "  F) System file repair (SKIPPED in Diagnose)"
+    echo "  G) Windows subsystem repairs (SKIPPED in Diagnose)"
+  elif [[ "$mode" == "DryRun" ]]; then
+    echo "  D) Permission / servicing readiness (PLANNED)"
+    echo "  E) Component store repair (PLANNED)"
+    echo "  F) System file repair (PLANNED)"
+    echo "  G) Windows subsystem repairs (PLANNED)"
+  else
+    echo "  D) Permission / servicing readiness"
+    echo "  E) Component store repair"
+    echo "  F) System file repair"
+    echo "  G) Windows subsystem repairs"
+  fi
+
+  echo "  H) Post-repair validation"
+  echo "  I) Final summary and export"
+}
+
 print_mode_banner() {
   local mode="$1"
   case "$mode" in
@@ -225,6 +257,7 @@ run_toolkit() {
   echo
   echo "[RUN] ${cmd[*]}"
   print_mode_banner "$mode"
+  print_stage_plan "$mode"
 
   local out_file exit_code used_elevated
   out_file="$(mktemp)"
