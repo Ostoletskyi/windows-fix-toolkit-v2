@@ -11,7 +11,9 @@ param(
     [ValidateSet('None','Update','Network','All')]
     [string]$SubsystemProfile = 'None',
     [ValidateSet('Quick','Normal','Deep')]
-    [string]$RepairProfile = 'Normal'
+    [string]$RepairProfile = 'Normal',
+    [ValidateSet('Quick','Normal','Deep')]
+    [string]$DiagnoseProfile = 'Normal'
 )
 
 Set-StrictMode -Version Latest
@@ -46,6 +48,6 @@ $meta = @(
 )
 $meta | Tee-Object -FilePath $TranscriptPath -Append
 
-$exitCode = Invoke-WindowsFix -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile
+$exitCode = Invoke-WindowsFix -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile
 "ExitCode=$exitCode" | Tee-Object -FilePath $TranscriptPath -Append | Out-Null
 exit $exitCode

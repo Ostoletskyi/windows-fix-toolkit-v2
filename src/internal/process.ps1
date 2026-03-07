@@ -48,19 +48,35 @@ function Invoke-ExternalCommand {
     $null = $proc.Start()
 
     $timedOut = $false
-    $spinChars = @('|','/','-','\')
-    $spinIndex = 0
-    while (-not $proc.WaitForExit($HeartbeatSec * 1000)) {
-        if ($State) {
-            $spin = $spinChars[$spinIndex % $spinChars.Count]
-            $spinIndex++
-            Write-ToolkitLog -State $State -Message "[HEARTBEAT $spin] still running: $cmdline elapsed=$([int]$sw.Elapsed.TotalSeconds)s"
+    $uiTickMs = 200
+    $lastHeartbeatSec = -1
+    $spinnerFrames = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
+    $spinnerIndex = 0
+    $interactive = -not [Console]::IsOutputRedirected
+
+    while (-not $proc.WaitForExit($uiTickMs)) {
+        $elapsedSec = [int]$sw.Elapsed.TotalSeconds
+
+        if ($interactive) {
+            $frame = $spinnerFrames[$spinnerIndex % $spinnerFrames.Count]
+            $spinnerIndex++
+            Write-Host -NoNewline ("`r[WORK {0}] {1} elapsed={2}s    " -f $frame, $cmdline, $elapsedSec)
         }
+
+        if ($State -and ($lastHeartbeatSec -lt 0 -or ($elapsedSec - $lastHeartbeatSec) -ge $HeartbeatSec)) {
+            $lastHeartbeatSec = $elapsedSec
+            Write-ToolkitLog -State $State -Message "[HEARTBEAT] still running: $cmdline elapsed=${elapsedSec}s"
+        }
+
         if ($sw.Elapsed.TotalSeconds -ge $TimeoutSec) {
             $timedOut = $true
             try { $proc.Kill() } catch {}
             break
         }
+    }
+
+    if ($interactive) {
+        Write-Host ""
     }
 
     $stdout = $proc.StandardOutput.ReadToEnd()

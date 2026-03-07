@@ -205,7 +205,7 @@ print_mode_banner() {
       echo "[INFO] Safe diagnostics and log analysis still run; repair commands stay PLANNED."
       ;;
     Diagnose)
-      echo "[INFO] Running real diagnostics (system/service/network checks + log analysis)."
+      echo "[INFO] Running real diagnostics (profile-aware probes + log analysis)."
       ;;
     Repair)
       echo "[INFO] Running real repair pipeline (profile-aware DISM + SFC), may take time."
@@ -357,6 +357,13 @@ ask_common_flags() {
     Quick|Normal|Deep) flags+=("-RepairProfile" "$repair_profile") ;;
     '') ;;
     *) echo "[WARN] Unknown RepairProfile, using Normal." ;;
+  esac
+
+  read -r -p "DiagnoseProfile (Quick/Normal/Deep, default Normal): " diagnose_profile
+  case "${diagnose_profile:-}" in
+    Quick|Normal|Deep) flags+=("-DiagnoseProfile" "$diagnose_profile") ;;
+    '') ;;
+    *) echo "[WARN] Unknown DiagnoseProfile, using Normal." ;;
   esac
 
   read -r -p "Custom ReportPath (leave empty for default): " report_path

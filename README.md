@@ -50,6 +50,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bin\windowsfix.ps1 -Mo
 - `-AssumeYes`
 - `-Force`
 - `-RepairProfile Quick|Normal|Deep`
+- `-DiagnoseProfile Quick|Normal|Deep`
 
 ## Меню
 ```bash
@@ -103,3 +104,9 @@ Bash оставлен как launcher-меню. Диагностика и рем
 - `Quick`: только `DISM CheckHealth` + SFC (быстрее, ScanHealth/RestoreHealth пропускаются).
 - `Normal` (default): `CheckHealth` + `ScanHealth`, `RestoreHealth` только при необходимости.
 - `Deep`: полный цикл `CheckHealth` + `ScanHealth` + `RestoreHealth` всегда.
+
+
+## Профили диагностики
+- `Quick`: минимальные проверки + сокращённый snapshot (быстрее).
+- `Normal` (default): сбалансированный набор проверок.
+- `Deep`: расширенный snapshot/валидация (дольше, подробнее).

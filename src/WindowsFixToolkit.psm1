@@ -22,7 +22,9 @@ function New-ToolkitState {
         [ValidateSet('None','Update','Network','All')]
         [string]$SubsystemProfile = 'None',
         [ValidateSet('Quick','Normal','Deep')]
-        [string]$RepairProfile = 'Normal'
+        [string]$RepairProfile = 'Normal',
+        [ValidateSet('Quick','Normal','Deep')]
+        [string]$DiagnoseProfile = 'Normal'
     )
 
     New-Item -ItemType Directory -Path $ReportPath -Force | Out-Null
@@ -44,6 +46,7 @@ function New-ToolkitState {
         Force          = [bool]$Force
         SubsystemProfile = $SubsystemProfile
         RepairProfile = $RepairProfile
+        DiagnoseProfile = $DiagnoseProfile
         StartedAt      = (Get-Date)
         IsAdmin        = (Test-IsAdmin)
         Stages         = New-Object System.Collections.Generic.List[object]
@@ -198,7 +201,8 @@ function Run-StageSnapshot {
         $stage.findings.Add('Baseline snapshot captured.')
 
         $eventsPath = Join-Path $State.ReportPath 'events-snapshot.txt'
-        Get-WinEvent -LogName System -MaxEvents 100 -ErrorAction SilentlyContinue |
+        $maxEvents = if ($State.DiagnoseProfile -eq 'Quick') { 40 } elseif ($State.DiagnoseProfile -eq 'Deep') { 300 } else { 100 }
+        Get-WinEvent -LogName System -MaxEvents $maxEvents -ErrorAction SilentlyContinue |
             Where-Object { $_.ProviderName -match 'Microsoft-Windows-WindowsUpdateClient|Service Control Manager|DISM|CBS' } |
             Select-Object TimeCreated, Id, ProviderName, LevelDisplayName, Message |
             Format-List | Out-File -FilePath $eventsPath -Encoding UTF8
@@ -216,14 +220,21 @@ function Run-StageSnapshot {
 function Run-StageEnvironmentValidation {
     param([pscustomobject]$State)
     $stage = New-Stage 'C' 'Environment validation'
+    $stage.findings.Add("DiagnoseProfile=$($State.DiagnoseProfile)")
 
-    $dismCheck = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
-    $dismStatus = if ($dismCheck.ExitCode -eq 0) { 'OK' } else { 'WARN' }
-    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth baseline' -Result $dismCheck -InterpretedStatus $dismStatus
-    $stage.findings.Add("DISM CheckHealth baseline exit=$($dismCheck.ExitCode)")
+    $dismCheck = $null
+    if ($State.DiagnoseProfile -eq 'Quick') {
+        $stage.actions.Add([pscustomobject]@{ name='DISM CheckHealth baseline'; status='SKIPPED'; reason='DiagnoseProfile=Quick'; exit_code=0; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /CheckHealth'; stdout=''; stderr='' })
+        $stage.findings.Add('Quick diagnose profile skips DISM CheckHealth baseline for speed.')
+    } else {
+        $dismCheck = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
+        $dismStatus = if ($dismCheck.ExitCode -eq 0) { 'OK' } else { 'WARN' }
+        Add-ActionResult -Stage $stage -Name 'DISM CheckHealth baseline' -Result $dismCheck -InterpretedStatus $dismStatus
+        $stage.findings.Add("DISM CheckHealth baseline exit=$($dismCheck.ExitCode)")
 
-    if ($dismCheck.StdOut -match 'repairable|corruption|component store') {
-        $stage.recommendations.Add('Component store issues indicated; proceed with servicing readiness + DISM repair stages.')
+        if ($dismCheck.StdOut -match 'repairable|corruption|component store') {
+            $stage.recommendations.Add('Component store issues indicated; proceed with servicing readiness + DISM repair stages.')
+        }
     }
 
     $diskErr = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7,51,55,153} -MaxEvents 30 -ErrorAction SilentlyContinue
@@ -232,7 +243,7 @@ function Run-StageEnvironmentValidation {
         $stage.recommendations.Add('Run CHKDSK before deep component/system repair.')
     }
 
-    $status = if ($dismCheck.ExitCode -ne 0 -or $diskErr) { 'WARN' } else { 'OK' }
+    $status = if (($dismCheck -and $dismCheck.ExitCode -ne 0) -or $diskErr) { 'WARN' } else { 'OK' }
     Complete-Stage -State $State -Stage $stage -Status $status -ExitCode 0
     return 0
 }
@@ -490,10 +501,12 @@ function Invoke-WindowsFix {
         [ValidateSet('None','Update','Network','All')]
         [string]$SubsystemProfile = 'None',
         [ValidateSet('Quick','Normal','Deep')]
-        [string]$RepairProfile = 'Normal'
+        [string]$RepairProfile = 'Normal',
+        [ValidateSet('Quick','Normal','Deep')]
+        [string]$DiagnoseProfile = 'Normal'
     )
 
-    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile
+    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile
     Write-ToolkitLog -State $state -Message "Mode=$Mode, EffectiveMode=$($state.EffectiveMode), IsAdmin=$($state.IsAdmin), ReportPath=$ReportPath"
 
     $exitCode = 0
