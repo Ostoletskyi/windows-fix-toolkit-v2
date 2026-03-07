@@ -462,7 +462,7 @@ function Run-StagePostValidation {
 
 function Run-StageFinalSummary {
     param([pscustomobject]$State)
-    $stage = New-Stage 'I' 'Final summary and export'
+    $stage = New-Stage 'I' 'Final summary'
 
     $failed = @($State.Stages | Where-Object { $_.status -eq 'FAIL' }).Count
     $warned = @($State.Stages | Where-Object { $_.status -eq 'WARN' }).Count
@@ -471,7 +471,7 @@ function Run-StageFinalSummary {
     $rebootRec = $State.Context['pending_reboot']
     if ($rebootRec) { $stage.recommendations.Add('Reboot recommended.') }
 
-    Complete-Stage -State $State -Stage $stage -Status ($(if($failed -gt 0){'FAIL'}elseif($warned -gt 0){'WARN'}else{'OK'})) -ExitCode 0
+    Complete-Stage -State $State -Stage $stage -Status ($(if($failed -gt 0){'FAIL'}elseif($warned -gt 0){'WARN'}else{'OK'})) -ExitCode ($(if($failed -gt 0){1}else{0}))
     return 0
 }
 

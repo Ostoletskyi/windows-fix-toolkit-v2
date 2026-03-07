@@ -84,7 +84,6 @@ $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs
 exit $p.ExitCode
 PS
 
-  echo "[INFO] Запускаю повышенный процесс (UAC prompt)..."
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file" -EntryPoint "$ep" -Mode "$mode" -ReportPath "$report_path" -ExtraArgsRaw "$extra_raw"
   local rc=$?
   rm -f "$ps_file" 2>/dev/null || true
@@ -193,7 +192,7 @@ print_stage_plan() {
   fi
 
   echo "  H) Post-repair validation"
-  echo "  I) Final summary and export"
+  echo "  I) Final summary"
 }
 
 print_mode_banner() {
@@ -214,6 +213,50 @@ print_mode_banner() {
       echo "[INFO] Running full pipeline: Diagnose + Repair + log collection/analysis."
       ;;
   esac
+}
+
+offer_open_analysis_file() {
+  local report_path="$1"
+  local exit_code="$2"
+
+  if [[ "$exit_code" == "0" ]]; then
+    return 0
+  fi
+
+  local report_md="$report_path/report.md"
+  local toolkit_log="$report_path/toolkit.log"
+  local transcript_log="$report_path/transcript.log"
+
+  local candidate=""
+  if [[ -f "$report_md" ]]; then
+    candidate="$report_md"
+  elif [[ -f "$toolkit_log" ]]; then
+    candidate="$toolkit_log"
+  elif [[ -f "$transcript_log" ]]; then
+    candidate="$transcript_log"
+  else
+    return 0
+  fi
+
+  echo "[HINT] Для ускорения диагностики откройте файл: $candidate"
+  read -r -p "Open this file now? (y/N): " ans
+  if [[ "${ans,,}" != "y" ]]; then
+    return 0
+  fi
+
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -Command "Start-Process -FilePath '$candidate'" >/dev/null 2>&1 || true
+    echo "[INFO] Open command sent."
+    return 0
+  fi
+
+  if command -v cygstart >/dev/null 2>&1; then
+    cygstart "$candidate" >/dev/null 2>&1 || true
+    echo "[INFO] Open command sent."
+    return 0
+  fi
+
+  echo "[WARN] Авто-открытие недоступно. Откройте вручную: $candidate"
 }
 
 run_toolkit() {
@@ -266,6 +309,7 @@ run_toolkit() {
   if mode_requires_admin "$mode" && ! is_admin; then
     used_elevated=1
     echo "[INFO] Команды вручную вводить не нужно: запуск выполняется автоматически в elevated-процессе."
+    echo "[INFO] Запускаю повышенный процесс (UAC prompt)..."
     set +e
     run_elevated "$mode" "$report_path" "${extra[@]}" >"$out_file" 2>&1
     exit_code=$?
@@ -329,6 +373,8 @@ run_toolkit() {
     echo "[NEXT] To run REAL diagnostics choose option 2 (Diagnose)."
     echo "[NEXT] To run REAL repairs choose option 3 (Repair) or 4 (Full)."
   fi
+
+  offer_open_analysis_file "$report_path" "$exit_code"
 
   rm -f "$out_file"
 
