@@ -208,7 +208,7 @@ print_mode_banner() {
       echo "[INFO] Running real diagnostics (system/service/network checks + log analysis)."
       ;;
     Repair)
-      echo "[INFO] Running real repair pipeline (DISM + optional SFC), may take time."
+      echo "[INFO] Running real repair pipeline (profile-aware DISM + SFC), may take time."
       ;;
     Full)
       echo "[INFO] Running full pipeline: Diagnose + Repair + log collection/analysis."
@@ -351,6 +351,13 @@ ask_common_flags() {
 
   read -r -p "Add -Force? (y/N): " ans
   [[ "${ans,,}" == "y" ]] && flags+=("-Force")
+
+  read -r -p "RepairProfile (Quick/Normal/Deep, default Normal): " repair_profile
+  case "${repair_profile:-}" in
+    Quick|Normal|Deep) flags+=("-RepairProfile" "$repair_profile") ;;
+    '') ;;
+    *) echo "[WARN] Unknown RepairProfile, using Normal." ;;
+  esac
 
   read -r -p "Custom ReportPath (leave empty for default): " report_path
   if [[ -n "${report_path:-}" ]]; then

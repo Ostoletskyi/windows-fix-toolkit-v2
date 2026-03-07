@@ -20,7 +20,9 @@ function New-ToolkitState {
         [switch]$AssumeYes,
         [switch]$Force,
         [ValidateSet('None','Update','Network','All')]
-        [string]$SubsystemProfile = 'None'
+        [string]$SubsystemProfile = 'None',
+        [ValidateSet('Quick','Normal','Deep')]
+        [string]$RepairProfile = 'Normal'
     )
 
     New-Item -ItemType Directory -Path $ReportPath -Force | Out-Null
@@ -41,6 +43,7 @@ function New-ToolkitState {
         AssumeYes      = [bool]$AssumeYes
         Force          = [bool]$Force
         SubsystemProfile = $SubsystemProfile
+        RepairProfile = $RepairProfile
         StartedAt      = (Get-Date)
         IsAdmin        = (Test-IsAdmin)
         Stages         = New-Object System.Collections.Generic.List[object]
@@ -283,21 +286,29 @@ function Run-StageComponentStoreRepair {
         return 0
     }
 
+    $stage.findings.Add("RepairProfile=$($State.RepairProfile)")
+
     $check = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
     Add-ActionResult -Stage $stage -Name 'DISM CheckHealth' -Result $check -InterpretedStatus ($(if($check.ExitCode -eq 0){'OK'}else{'WARN'}))
 
-    $scan = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/ScanHealth') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode
-    Add-ActionResult -Stage $stage -Name 'DISM ScanHealth' -Result $scan -InterpretedStatus ($(if($scan.ExitCode -eq 0){'OK'}else{'FAIL'}))
+    if ($State.RepairProfile -eq 'Quick') {
+        $stage.actions.Add([pscustomobject]@{ name='DISM ScanHealth'; status='SKIPPED'; reason='RepairProfile=Quick'; exit_code=0; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /ScanHealth'; stdout=''; stderr='' })
+        $stage.actions.Add([pscustomobject]@{ name='DISM RestoreHealth'; status='SKIPPED'; reason='RepairProfile=Quick'; exit_code=0; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /RestoreHealth'; stdout=''; stderr='' })
+        $stage.recommendations.Add('Quick profile skips ScanHealth/RestoreHealth for faster run. Use RepairProfile=Normal or Deep for full servicing repair.')
+    } else {
+        $scan = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/ScanHealth') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode
+        Add-ActionResult -Stage $stage -Name 'DISM ScanHealth' -Result $scan -InterpretedStatus ($(if($scan.ExitCode -eq 0){'OK'}else{'FAIL'}))
 
-    $needRestore = $true
-    if ($scan.ExitCode -eq 0 -and $scan.StdOut -match 'No component store corruption detected') {
-        $needRestore = $false
-        $stage.findings.Add('ScanHealth reports no corruption; conservative mode skipping RestoreHealth.')
-    }
+        $needRestore = $true
+        if ($scan.ExitCode -eq 0 -and $scan.StdOut -match 'No component store corruption detected' -and $State.RepairProfile -eq 'Normal') {
+            $needRestore = $false
+            $stage.findings.Add('ScanHealth reports no corruption; Normal profile skips RestoreHealth.')
+        }
 
-    if ($needRestore) {
-        $restore = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
-        Add-ActionResult -Stage $stage -Name 'DISM RestoreHealth' -Result $restore -InterpretedStatus ($(if($restore.ExitCode -eq 0){'OK'}else{'FAIL'}))
+        if ($needRestore) {
+            $restore = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
+            Add-ActionResult -Stage $stage -Name 'DISM RestoreHealth' -Result $restore -InterpretedStatus ($(if($restore.ExitCode -eq 0){'OK'}else{'FAIL'}))
+        }
     }
 
     $verify = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
@@ -477,10 +488,12 @@ function Invoke-WindowsFix {
         [switch]$AssumeYes,
         [switch]$Force,
         [ValidateSet('None','Update','Network','All')]
-        [string]$SubsystemProfile = 'None'
+        [string]$SubsystemProfile = 'None',
+        [ValidateSet('Quick','Normal','Deep')]
+        [string]$RepairProfile = 'Normal'
     )
 
-    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile
+    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile
     Write-ToolkitLog -State $state -Message "Mode=$Mode, EffectiveMode=$($state.EffectiveMode), IsAdmin=$($state.IsAdmin), ReportPath=$ReportPath"
 
     $exitCode = 0
