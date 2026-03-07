@@ -48,9 +48,13 @@ function Invoke-ExternalCommand {
     $null = $proc.Start()
 
     $timedOut = $false
+    $spinChars = @('|','/','-','\')
+    $spinIndex = 0
     while (-not $proc.WaitForExit($HeartbeatSec * 1000)) {
         if ($State) {
-            Write-ToolkitLog -State $State -Message "[HEARTBEAT] still running: $cmdline elapsed=$([int]$sw.Elapsed.TotalSeconds)s"
+            $spin = $spinChars[$spinIndex % $spinChars.Count]
+            $spinIndex++
+            Write-ToolkitLog -State $State -Message "[HEARTBEAT $spin] still running: $cmdline elapsed=$([int]$sw.Elapsed.TotalSeconds)s"
         }
         if ($sw.Elapsed.TotalSeconds -ge $TimeoutSec) {
             $timedOut = $true
