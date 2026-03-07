@@ -1,11 +1,10 @@
 # windows-fix-toolkit-v2
 
-Windows Fix Toolkit в **единой bash-среде** (без обязательного PowerShell runtime для оркестрации).
+Windows Fix Toolkit: **утилиты выполняются на PowerShell 5.1**, а bash используется как launcher-меню.
 
 ## Что сделано
-- Единый bash entrypoint: `bin/windowsfix.sh`
-- Bash toolkit-core: `src/bash_toolkit.sh`
-- Меню запуска режимов: `bin/windowsfix-menu.sh`
+- Основной runtime: `bin/windowsfix.ps1` + `src/WindowsFixToolkit.psm1`
+- Bash launcher-меню: `bin/windowsfix-menu.sh`
 - Git monitor: `bin/project-git-monitor.sh`
 - Отчёты и логи:
   - `report.json`
@@ -15,17 +14,16 @@ Windows Fix Toolkit в **единой bash-среде** (без обязател
 - Bash smoke test: `tests/smoke.sh`
 
 ## Режимы
-- `SelfTest`
 - `Diagnose`
-- `Repair` (DISM CheckHealth + опционально DISM ScanHealth + SFC /scannow)
-- `Full` (Diagnose + Repair + экспорт каталога логов)
-- `DryRun` (план без выполнения опасных шагов)
+- `Repair` (по стадиям readiness -> DISM -> SFC -> subsystem -> postcheck)
+- `Full` (Diagnose + Repair + Post-check)
+- `DryRun` (PLANNED-план без изменений)
 
 ## Быстрый старт
 ```bash
-bash ./bin/windowsfix.sh -Mode SelfTest
-bash ./bin/windowsfix.sh -Mode Diagnose
-bash ./bin/windowsfix.sh -Mode DryRun
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bin\windowsfix.ps1 -Mode Diagnose
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bin\windowsfix.ps1 -Mode Repair
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bin\windowsfix.ps1 -Mode DryRun
 ```
 
 - Для `Repair` и `Full` без прав администратора ожидаем `ExitCode=2` и шаг `Admin check: FAIL` (это корректное поведение, не падение меню).
@@ -33,7 +31,7 @@ bash ./bin/windowsfix.sh -Mode DryRun
 
 
 > Важно: `DryRun` не запускает ремонтные действия (DISM/SFC fix), но выполняет безопасную диагностику и анализ доступных логов.
-> Поэтому в `DryRun` будут `SKIPPED` только repair-шаги, а диагностические шаги должны выполняться реально.
+> Поэтому в `DryRun` ремонтные стадии отмечаются как `PLANNED` и не выполняются.
 
 ## Где сканирование системы
 Сканирование выполняется в режиме `Repair` и `Full`:
@@ -42,7 +40,7 @@ bash ./bin/windowsfix.sh -Mode DryRun
 3. `sfc.exe /scannow` (по подтверждению)
 
 Чтобы запускать эти шаги без дополнительных вопросов, используйте флаг `-AssumeYes` (или `-Force`).
-В `DryRun` шаги показываются как план (`SKIPPED`), без реального запуска.
+В `DryRun` шаги показываются как план (`PLANNED`), без реального запуска.
 
 ## Параметры
 - `-Mode Diagnose|Repair|Full|SelfTest|DryRun`
@@ -68,7 +66,7 @@ bash ./tests/smoke.sh
 ```
 
 ## Примечание
-Старые PowerShell-файлы оставлены в репозитории как legacy-референс, но основной рабочий контур теперь полностью bash.
+Bash оставлен как launcher-меню. Диагностика и ремонт выполняются PowerShell runtime.
 
 
 ## Понятный вывод результата и индикация процесса

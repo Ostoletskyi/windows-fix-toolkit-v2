@@ -24,6 +24,7 @@ function Invoke-ExternalCommand {
         [string]$FilePath,
         [string[]]$ArgumentList,
         [int]$TimeoutSec = 600,
+        [int]$HeartbeatSec = 15,
         [pscustomobject]$State,
         [switch]$IgnoreExitCode
     )
@@ -45,28 +46,42 @@ function Invoke-ExternalCommand {
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $null = $proc.Start()
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $stderr = $proc.StandardError.ReadToEnd()
 
-    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-        try { $proc.Kill() } catch {}
-        throw "Command timeout after $TimeoutSec seconds: $cmdline"
+    $timedOut = $false
+    while (-not $proc.WaitForExit($HeartbeatSec * 1000)) {
+        if ($State) {
+            Write-ToolkitLog -State $State -Message "[HEARTBEAT] still running: $cmdline elapsed=$([int]$sw.Elapsed.TotalSeconds)s"
+        }
+        if ($sw.Elapsed.TotalSeconds -ge $TimeoutSec) {
+            $timedOut = $true
+            try { $proc.Kill() } catch {}
+            break
+        }
     }
 
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    $stderr = $proc.StandardError.ReadToEnd()
+    if (-not $timedOut) { $null = $proc.WaitForExit() }
+
     $sw.Stop()
+    $exitCode = if ($timedOut) { 124 } else { $proc.ExitCode }
+
     $result = [pscustomobject]@{
         FilePath    = $FilePath
         Arguments   = $argsClean
         CommandLine = $cmdline
-        ExitCode    = $proc.ExitCode
+        ExitCode    = $exitCode
         StdOut      = $stdout.Trim()
         StdErr      = $stderr.Trim()
         DurationMs  = [int]$sw.ElapsedMilliseconds
-        TimedOut    = $false
-        Success     = ($proc.ExitCode -eq 0)
+        TimedOut    = $timedOut
+        Success     = (-not $timedOut -and $exitCode -eq 0)
     }
 
     if (-not $IgnoreExitCode -and -not $result.Success) {
+        if ($timedOut) {
+            throw "Command timeout after $TimeoutSec seconds: $cmdline"
+        }
         throw "Command failed with exit code $($result.ExitCode): $cmdline`n$($result.StdErr)"
     }
 

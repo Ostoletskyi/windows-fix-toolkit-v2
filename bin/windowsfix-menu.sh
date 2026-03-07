@@ -3,12 +3,22 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-ENTRYPOINT="$REPO_ROOT/bin/windowsfix.sh"
+ENTRYPOINT="$REPO_ROOT/bin/windowsfix.ps1"
 
 if [[ ! -f "$ENTRYPOINT" ]]; then
   echo "[ERROR] Entrypoint not found: $ENTRYPOINT"
   exit 1
 fi
+
+resolve_ps() {
+  if command -v powershell.exe >/dev/null 2>&1; then
+    echo "powershell.exe"; return 0
+  fi
+  if command -v pwsh >/dev/null 2>&1; then
+    echo "pwsh"; return 0
+  fi
+  return 1
+}
 
 is_admin() {
   if command -v net.exe >/dev/null 2>&1; then
@@ -38,51 +48,34 @@ run_elevated() {
   while [[ $i -lt ${#extra_flags[@]} ]]; do
     local token="${extra_flags[$i]}"
     if [[ "$token" == "-ReportPath" ]]; then
-      i=$((i+2))
-      continue
+      i=$((i+2)); continue
     fi
     filtered_flags+=("$token")
     i=$((i+1))
   done
 
-  local extra_joined=""
-  if [[ ${#filtered_flags[@]} -gt 0 ]]; then
-    extra_joined="$(printf '%s\n' "${filtered_flags[@]}")"
-  fi
-
-  local bash_path entrypoint_path
-  bash_path="$(command -v bash)"
-  # Keep entrypoint in POSIX form (/c/.../script.sh) because bash expects POSIX paths.
-  entrypoint_path="$ENTRYPOINT"
+  local ep="$ENTRYPOINT"
   if command -v cygpath >/dev/null 2>&1; then
-    bash_path="$(cygpath -w "$bash_path")"
+    ep="$(cygpath -w "$ep")"
   fi
 
   local ps_file
   ps_file="$(mktemp).ps1"
   cat > "$ps_file" <<'PS'
 param(
-  [Parameter(Mandatory=$true)][string]$BashPath,
   [Parameter(Mandatory=$true)][string]$EntryPoint,
   [Parameter(Mandatory=$true)][string]$Mode,
   [Parameter(Mandatory=$true)][string]$ReportPath,
-  [string]$ExtraArgsRaw = ""
+  [string[]]$ExtraArgs
 )
-
-$argList = @($EntryPoint, '-Mode', $Mode, '-ReportPath', $ReportPath)
-if ($ExtraArgsRaw) {
-  $extra = $ExtraArgsRaw -split "`n" | Where-Object { $_ -ne '' }
-  if ($extra.Count -gt 0) {
-    $argList += $extra
-  }
-}
-
-$p = Start-Process -FilePath $BashPath -ArgumentList $argList -Verb RunAs -Wait -PassThru
+$argList = @('-NoProfile','-ExecutionPolicy','Bypass','-File', $EntryPoint, '-Mode', $Mode, '-ReportPath', $ReportPath)
+if ($ExtraArgs) { $argList += $ExtraArgs }
+$p = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs -Wait -PassThru
 exit $p.ExitCode
 PS
 
   echo "[INFO] Запускаю повышенный процесс (UAC prompt)..."
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file"     -BashPath "$bash_path"     -EntryPoint "$entrypoint_path"     -Mode "$mode"     -ReportPath "$report_path"     -ExtraArgsRaw "$extra_joined"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps_file" -EntryPoint "$ep" -Mode "$mode" -ReportPath "$report_path" -ExtraArgs $filtered_flags
   local rc=$?
   rm -f "$ps_file" 2>/dev/null || true
   return $rc
@@ -200,8 +193,18 @@ run_toolkit() {
     extra+=("-ReportPath" "$report_path")
   fi
 
+  local ps_cmd
+  ps_cmd="$(resolve_ps || true)"
+  if [[ -z "$ps_cmd" ]]; then
+    echo "[ERROR] powershell.exe/pwsh not found in PATH."
+    return 10
+  fi
+
   local cmd=(
-    bash "$ENTRYPOINT"
+    "$ps_cmd"
+    -NoProfile
+    -ExecutionPolicy Bypass
+    -File "$ENTRYPOINT"
     -Mode "$mode"
   )
 
@@ -323,12 +326,11 @@ print_menu() {
     "Entry: $ENTRYPOINT" \
     'Runtime: bash' \
     '' \
-    '1) SelfTest' \
-    '2) Diagnose' \
-    '3) Repair (DISM CheckHealth + ScanHealth + SFC)' \
-    '4) Full (Diagnose + Repair + logs export)' \
-    '5) DryRun (preview only, no real system changes)' \
-    '6) Custom mode with flags' \
+    '1) Diagnose' \
+    '2) Repair (staged: readiness -> DISM -> SFC -> postcheck)' \
+    '3) Full (Diagnose + Repair + Recheck)' \
+    '4) DryRun (preview only, no real system changes)' \
+    '5) Custom mode with flags' \
     '0) Exit'
 }
 
@@ -340,15 +342,14 @@ main_menu() {
     read -r -p "Select option: " choice
 
     case "$choice" in
-      1) run_toolkit "SelfTest" ;;
-      2) run_toolkit "Diagnose" ;;
-      3) run_toolkit "Repair" ;;
-      4) run_toolkit "Full" ;;
-      5) run_toolkit "DryRun" ;;
-      6)
-        read -r -p "Mode (SelfTest/Diagnose/Repair/Full/DryRun): " mode
+      1) run_toolkit "Diagnose" ;;
+      2) run_toolkit "Repair" ;;
+      3) run_toolkit "Full" ;;
+      4) run_toolkit "DryRun" ;;
+      5)
+        read -r -p "Mode (Diagnose/Repair/Full/DryRun): " mode
         case "$mode" in
-          SelfTest|Diagnose|Repair|Full|DryRun) ;;
+          Diagnose|Repair|Full|DryRun) ;;
           *)
             echo "[WARN] Invalid mode: $mode"
             read -r -p "Press Enter to continue..." _
