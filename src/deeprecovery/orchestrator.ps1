@@ -30,6 +30,8 @@ function Invoke-DeepRecoveryScaffold {
     $dismPhase = Invoke-DeepRecoveryDismPhase -State $State
     $sfcPhase = Invoke-DeepRecoverySfcPhase -State $State
     $postcheckPhase = Invoke-DeepRecoveryPostcheckPhase -State $State
+    $escalationPhase = Invoke-DeepRecoveryEscalationDecisionPhase -State $State
+    $reinstallPhase = Invoke-DeepRecoveryReinstallPathPhase -State $State
 
     $phaseResults = @(
         $preflightPhase,
@@ -40,8 +42,8 @@ function Invoke-DeepRecoveryScaffold {
         $dismPhase,
         $sfcPhase,
         $postcheckPhase,
-        Invoke-DeepRecoveryEscalationDecisionPhase -State $State,
-        Invoke-DeepRecoveryReinstallPathPhase -State $State
+        $escalationPhase,
+        $reinstallPhase
     )
 
     foreach ($pr in $phaseResults) {
@@ -61,6 +63,17 @@ function Invoke-DeepRecoveryScaffold {
     if ($State.Context['deepRecovery']['dismResult']) { $report.dismResult = $State.Context['deepRecovery']['dismResult'] }
     if ($State.Context['deepRecovery']['sfcResult']) { $report.sfcResult = $State.Context['deepRecovery']['sfcResult'] }
     if ($State.Context['deepRecovery']['postcheckResult']) { $report.postcheckResult = $State.Context['deepRecovery']['postcheckResult'] }
+    if ($State.Context['deepRecovery']['escalationDecisionResult']) { $report.escalationDecisionResult = $State.Context['deepRecovery']['escalationDecisionResult'] }
+    if ($State.Context['deepRecovery']['reinstallPathResult']) { $report.reinstallPathResult = $State.Context['deepRecovery']['reinstallPathResult'] }
+
+    $report.machineProfile = [pscustomobject]@{
+        family = $report.preflightResult.os.family
+        edition = $report.preflightResult.os.edition
+        architecture = $report.preflightResult.os.architecture
+        build = $report.preflightResult.os.build
+        version = $report.preflightResult.os.version
+        uiLanguage = $report.preflightResult.os.uiLanguage
+    }
 
     $report.requiresStrongAck = [bool]$State.Context['deepRecovery']['requiresStrongAck']
 
@@ -80,20 +93,30 @@ function Invoke-DeepRecoveryScaffold {
     $hasFail = @($phaseResults | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0
     $hasWarn = @($phaseResults | Where-Object { $_.status -eq 'WARN' }).Count -gt 0
 
+    if ($report.postcheckResult.classification -eq 'resolved') { $report.confidence = 'high' }
+    elseif ($report.postcheckResult.classification -eq 'inconclusive') { $report.confidence = 'medium' }
+    else { $report.confidence = 'low' }
+
+    $report.finalSummary = "Escalation decision: $($report.escalationDecisionResult.decision). Reinstall recommended: $($report.reinstallPathResult.recommended). Reboot recommended: $($report.postcheckResult.rebootRecommended)."
+
     Set-DeepRecoveryScaffoldState -State $State -Report $report
 
     $stage = New-Stage 'DR-S0' 'Deep Recovery scaffold orchestration'
+    $stage.findings.Add("Machine profile: $($report.machineProfile.family) | $($report.machineProfile.edition) | $($report.machineProfile.architecture) | build $($report.machineProfile.build)")
     $stage.findings.Add("Preflight classification: $($report.preflightResult.classification)")
     $stage.findings.Add("Safeguard classification: $($report.safeguardResult.classification)")
     $stage.findings.Add("Source validation: $($report.sourceValidationResult.validation)")
     $stage.findings.Add("DISM outcome: $($report.dismResult.outcome); SFC outcome: $($report.sfcResult.outcome)")
     $stage.findings.Add("Postcheck classification: $($report.postcheckResult.classification)")
+    $stage.findings.Add("Escalation decision: $($report.escalationDecisionResult.decision)")
+    $stage.findings.Add("Reinstall recommended: $($report.reinstallPathResult.recommended)")
+    $stage.findings.Add("Final confidence: $($report.confidence)")
 
     if ($report.requiresStrongAck) {
-        $stage.findings.Add('Rollback safeguard could not be guaranteed; stronger acknowledgement is required for high-risk continuation.')
+        $stage.findings.Add('Severe acknowledgement remains required for high-risk continuation.')
     }
-
-    $stage.recommendations.Add('Step 3 completed: source handling + DISM/SFC/postcheck implemented; escalation/reinstall remain stubs.')
+    $stage.recommendations.Add('Step 4 completed: final escalation/reinstall-path policy and reporting are in place.')
+    $stage.recommendations.Add('Safety constraints enforced: no silent reinstall and no unsupported direct system-file transplantation.')
 
     $status = if ($hasFail) { 'FAIL' } elseif ($hasWarn) { 'WARN' } else { 'OK' }
     Complete-Stage -State $State -Stage $stage -Status $status -ExitCode ($(if($hasFail){1}else{0}))

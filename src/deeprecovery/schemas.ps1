@@ -91,6 +91,28 @@ function New-DeepRecoveryPostcheckResultTemplate {
     }
 }
 
+function New-DeepRecoveryEscalationDecisionResultTemplate {
+    [pscustomobject]@{
+        scenario = 'unknown'
+        decision = 'continue_with_warning'
+        risk = 'medium'
+        requiresSevereAcknowledgement = $false
+    }
+}
+
+function New-DeepRecoveryReinstallPathResultTemplate {
+    [pscustomobject]@{
+        recommended = $false
+        invoked = $false
+        windows11SupportedReinstallPath = $false
+        inPlaceUpgradeRepairInstallSupportedPath = $true
+        silentExecutionAllowed = $false
+        acknowledgementRequired = $true
+        acknowledgementText = ''
+        recommendations = @()
+    }
+}
+
 function New-DeepRecoveryStageResultTemplate {
     param(
         [Parameter(Mandatory)][string]$Phase,
@@ -115,8 +137,9 @@ function New-DeepRecoveryStageResultTemplate {
 function New-DeepRecoveryFinalReportTemplate {
     [pscustomobject]@{
         feature = 'Deep Recovery (Official Microsoft Source)'
-        step = 3
+        step = 4
         phases = @()
+        machineProfile = [pscustomobject]@{ family='Unknown'; edition='Unknown'; architecture='Unknown'; build='Unknown'; version='Unknown'; uiLanguage='unknown' }
         preflightResult = New-DeepRecoveryPreflightResultTemplate
         safeguardCheckResult = New-DeepRecoverySafeguardResultTemplate
         safeguardResult = New-DeepRecoverySafeguardResultTemplate
@@ -125,9 +148,12 @@ function New-DeepRecoveryFinalReportTemplate {
         dismResult = New-DeepRecoveryRepairResultTemplate
         sfcResult = New-DeepRecoveryRepairResultTemplate
         postcheckResult = New-DeepRecoveryPostcheckResultTemplate
+        escalationDecisionResult = New-DeepRecoveryEscalationDecisionResultTemplate
+        reinstallPathResult = New-DeepRecoveryReinstallPathResultTemplate
         overallStatus = 'PLANNED'
         requiresStrongAck = $false
         confidence = 'medium'
-        nextStep = 'Step 4: escalation and reinstall-path policy implementation'
+        finalSummary = ''
+        nextStep = 'Deep Recovery implementation completed (step 4/4)'
     }
 }

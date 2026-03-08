@@ -1,69 +1,60 @@
-# Deep Recovery (Official Microsoft Source) — Step 3
+# Deep Recovery (Official Microsoft Source) — Step 4 (Final)
 
-## Scope implemented in Step 3
-Implemented:
-- `SOURCE_DISCOVERY`
-- `SOURCE_VALIDATION`
-- `REPAIR_STAGE_DISM`
-- `REPAIR_STAGE_SFC`
-- `POSTCHECK`
-
-Still stubbed by design:
+## Scope implemented in Step 4
+Implemented final layers:
 - `ESCALATION_DECISION`
-- `REINSTALL_PATH`
+- `REINSTALL_PATH` (modeling only, no silent execution)
+- final policy matrix and signature registry for Deep Recovery
+- final classification and reporting refinement
+- final safety constraints review
 
-## SOURCE_DISCOVERY
-Conservative pluggable discovery model:
-- user-provided path (`-RecoverySourcePath`)
-- known local paths (`C:\sources\install.wim/esd`, `C:\Windows\Sources\install.wim/esd`)
-- mounted media probes (`<drive>\sources\install.wim/esd/swm`)
-- explicit placeholder hook for future official download provider (not implemented)
+## Escalation decision outcomes
+Based on prior phase outputs, policy now chooses one of:
+- `continue_without_escalation`
+- `retry_with_different_source`
+- `offline_required_guidance`
+- `winre_required_guidance`
+- `reinstall_recommended`
+- `abort_as_unsupported_or_too_risky`
 
-## SOURCE_VALIDATION
-Best-effort validation against running OS context:
-- architecture
-- edition/name hint
-- version/build compatibility (major/minor)
-- language hint where present
-- source type handling (`wim`, `esd`, `swm`, other)
+## Supported reinstall/recovery path modeling
+- Never performs silent reinstall.
+- Requires severe acknowledgement for high-risk continuation.
+- Models Microsoft-supported pathways only:
+  - Windows 11: **Fix problems using Windows Update → Reinstall now** (guidance)
+  - supported repair install / in-place upgrade path with matching official media (guidance)
 
-Validation classes:
-- `valid`
-- `partial match`
-- `mismatch`
-- `unsupported`
-- `corrupted/unusable`
+## Final decision matrix coverage
+Implemented matrix includes:
+- client with restore point available
+- client with restore point unavailable
+- client with policy-disabled restore
+- server with backup readiness
+- server without rollback artifact
+- valid source but failed repair
+- source mismatch
+- offline-required
+- WinRE-required
+- unsupported/high-risk
+- toolkit internal failure vs Windows servicing failure
 
-## REPAIR_STAGE_DISM
-- Executes conservative `DISM /Online /Cleanup-Image /RestoreHealth`.
-- Uses ` /Source:<path> /LimitAccess` when a validated local source exists.
-- Normalizes outcomes into categories:
-  - toolkit internal execution failure
-  - source problem
-  - servicing/component store problem
-  - environment/permissions problem
-  - success / partial success / failed / inconclusive
+## Final reporting fields
+Deep Recovery report now clearly includes:
+- machine profile
+- preflight summary
+- safeguard result
+- source discovery + validation
+- DISM result
+- SFC result
+- postcheck result
+- escalation decision
+- reinstall path recommendation status
+- reboot recommendation
+- final confidence
+- human-readable final summary
 
-## REPAIR_STAGE_SFC
-- Executes `sfc /scannow` after DISM where appropriate.
-- Uses same normalized classification model.
-
-## POSTCHECK
-- Executes:
-  - `DISM /Online /Cleanup-Image /CheckHealth`
-  - `sfc /verifyonly`
-- Parses baseline signals and classifies:
-  - `resolved`
-  - `remains`
-  - `inconclusive`
-- Records reboot recommendation (pending reboot marker based).
-
-## Reporting updates
-Deep Recovery step report now includes:
-- source validation status
-- DISM/SFC outcomes and classifications
-- postcheck classification and reboot recommendation
-- strong-ack requirement state
-
-## Step 4 integration note
-Step 4 should consume Step 3 outputs (`sourceValidationResult`, `dismResult`, `sfcResult`, `postcheckResult`) to drive supported escalation/reinstall policy decisions only.
+## Final safety constraints
+- no direct file transplantation into protected Windows system directories
+- no silent reinstall execution
+- no hidden side effects outside supported servicing/recovery guidance
+- severe acknowledgement remains mandatory for high-risk continuation

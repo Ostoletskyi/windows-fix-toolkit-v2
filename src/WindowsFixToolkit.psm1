@@ -1238,15 +1238,22 @@ function Export-ToolkitReport {
     if ($payload.deepRecovery) {
         $lines += ''
         $lines += '## Deep Recovery (step report)'
+        $lines += "- MachineProfile: family=$($payload.deepRecovery.machineProfile.family), edition=$($payload.deepRecovery.machineProfile.edition), arch=$($payload.deepRecovery.machineProfile.architecture), build=$($payload.deepRecovery.machineProfile.build), lang=$($payload.deepRecovery.machineProfile.uiLanguage)"
+        $lines += "- PreflightSummary: classification=$($payload.deepRecovery.preflightResult.classification), pendingReboot=$($payload.deepRecovery.preflightResult.pendingReboot), online=$($payload.deepRecovery.preflightResult.internetConnectivity)"
         $lines += "- OverallStatus: $($payload.deepRecovery.overallStatus)"
         $lines += "- PreflightClassification: $($payload.deepRecovery.preflightResult.classification)"
         $lines += "- SafeguardCheckClassification: $($payload.deepRecovery.safeguardCheckResult.classification)"
         $lines += "- SafeguardResultClassification: $($payload.deepRecovery.safeguardResult.classification)"
         $lines += "- RequiresStrongAck: $($payload.deepRecovery.requiresStrongAck)"
+        $lines += "- SourceDiscovery: candidates=$(@($payload.deepRecovery.sourceDiscoveryResult.candidates).Count), selected=$($payload.deepRecovery.sourceDiscoveryResult.selected.path)"
         $lines += "- SourceValidation: $($payload.deepRecovery.sourceValidationResult.validation)"
         $lines += "- DISM: outcome=$($payload.deepRecovery.dismResult.outcome), class=$($payload.deepRecovery.dismResult.classification)"
         $lines += "- SFC: outcome=$($payload.deepRecovery.sfcResult.outcome), class=$($payload.deepRecovery.sfcResult.classification)"
         $lines += "- Postcheck: $($payload.deepRecovery.postcheckResult.classification), rebootRecommended=$($payload.deepRecovery.postcheckResult.rebootRecommended)"
+        $lines += "- EscalationDecision: $($payload.deepRecovery.escalationDecisionResult.decision), risk=$($payload.deepRecovery.escalationDecisionResult.risk)"
+        $lines += "- ReinstallPath: recommended=$($payload.deepRecovery.reinstallPathResult.recommended), invoked=$($payload.deepRecovery.reinstallPathResult.invoked), win11Path=$($payload.deepRecovery.reinstallPathResult.windows11SupportedReinstallPath), acknowledgementRequired=$($payload.deepRecovery.reinstallPathResult.acknowledgementRequired)"
+        $lines += "- FinalConfidence: $($payload.deepRecovery.confidence)"
+        $lines += "- HumanSummary: $($payload.deepRecovery.finalSummary)"
     }
 
     Set-Content -Path $mdPath -Value $lines -Encoding UTF8

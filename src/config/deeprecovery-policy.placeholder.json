@@ -1,12 +1,19 @@
 {
-  "version": 1,
-  "step": 1,
-  "description": "Deep Recovery policy placeholders for phased implementation",
+  "version": 4,
+  "step": 4,
+  "description": "Deep Recovery final decision matrix (Microsoft-supported pathways)",
   "policies": {
-    "DR_PLACEHOLDER": {
-      "action": "none",
-      "retry_allowed": false,
-      "notes": "Implement in Step 2+"
-    }
+    "client_restore_available": { "decision": "continue_without_escalation", "risk": "low", "requires_ack": false },
+    "client_restore_unavailable": { "decision": "continue_with_warning", "risk": "medium", "requires_ack": true },
+    "client_policy_disabled_restore": { "decision": "continue_with_warning", "risk": "high", "requires_ack": true },
+    "server_backup_ready": { "decision": "continue_without_escalation", "risk": "medium", "requires_ack": false },
+    "server_no_rollback_artifact": { "decision": "continue_with_warning", "risk": "high", "requires_ack": true },
+    "valid_source_failed_repair": { "decision": "reinstall_recommended", "risk": "high", "requires_ack": true },
+    "source_mismatch": { "decision": "retry_with_different_source", "risk": "medium", "requires_ack": false },
+    "offline_required": { "decision": "offline_required_guidance", "risk": "medium", "requires_ack": false },
+    "winre_required": { "decision": "winre_required_guidance", "risk": "medium", "requires_ack": false },
+    "unsupported_high_risk": { "decision": "abort_as_unsupported_or_too_risky", "risk": "high", "requires_ack": true },
+    "toolkit_internal_failure": { "decision": "abort_as_unsupported_or_too_risky", "risk": "high", "requires_ack": false },
+    "windows_servicing_failure": { "decision": "reinstall_recommended", "risk": "high", "requires_ack": true }
   }
 }
