@@ -19,8 +19,19 @@ function ConvertTo-CommandLine {
 
 function Test-UseSeparateServiceWindow {
     param([string]$FilePath)
-    # Reliability-first: run all commands in captured mode to guarantee exit code
-    # and output collection for auditing/reporting.
+
+    # For long-running native servicing tools, prefer a separate console window.
+    # This restores the expected on-screen DISM/SFC progress behavior and avoids
+    # the launcher appearing frozen on spinner-only output.
+    if (-not [Console]::IsOutputRedirected) {
+        $tool = ''
+        try { $tool = [System.IO.Path]::GetFileNameWithoutExtension([string]$FilePath).ToLowerInvariant() } catch { $tool = '' }
+        if ($tool -in @('dism','sfc','chkdsk')) {
+            return $true
+        }
+    }
+
+    # Keep captured mode for everything else to maximize structured logs/artifacts.
     return $false
 }
 
