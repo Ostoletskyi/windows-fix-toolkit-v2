@@ -29,7 +29,26 @@ function New-ToolkitState {
         [int]$KeepOutputRuns = 5
     )
 
-    New-Item -ItemType Directory -Path $ReportPath -Force | Out-Null
+    $ReportPath = $ReportPath.Trim()
+    if ($ReportPath -match '[<>"|?*]') {
+        throw "Invalid characters in ReportPath"
+    }
+    $resolvedReportPath = [System.IO.Path]::GetFullPath($ReportPath)
+    if (-not $resolvedReportPath -or [System.IO.Path]::GetPathRoot($resolvedReportPath) -eq '') {
+        throw "Unable to resolve ReportPath: $ReportPath"
+    }
+
+    try {
+        $null = New-Item -ItemType Directory -Path $resolvedReportPath -Force -ErrorAction Stop
+    } catch [System.UnauthorizedAccessException] {
+        throw "Access denied creating report directory: $resolvedReportPath"
+    } catch [System.IO.IOException] {
+        throw "I/O error creating report directory: $resolvedReportPath - $($_.Exception.Message)"
+    } catch {
+        throw "Failed to create report directory: $($_.Exception.Message)"
+    }
+
+    $ReportPath = $resolvedReportPath
     $resolvedLogPath = [System.IO.Path]::GetFullPath($LogPath)
     $resolvedTranscriptPath = [System.IO.Path]::GetFullPath($TranscriptPath)
     if ($resolvedLogPath.Equals($resolvedTranscriptPath, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -93,6 +112,27 @@ function Complete-Stage {
     Write-StageJournal -State $State -Stage $Stage
 }
 
+function Invoke-WithRetry {
+    param(
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock,
+        [int]$MaxRetries = 3,
+        [int]$DelaySeconds = 1,
+        [scriptblock]$ShouldRetry = { param($ex) $true }
+    )
+
+    $attempt = 0
+    while ($attempt -lt $MaxRetries) {
+        try {
+            return & $ScriptBlock
+        } catch {
+            $attempt++
+            if ($attempt -ge $MaxRetries -or -not (& $ShouldRetry $_)) { throw }
+            $delay = [int]($DelaySeconds * [Math]::Pow(2, ($attempt - 1)))
+            Start-Sleep -Seconds $delay
+        }
+    }
+}
+
 function Write-StageJournal {
     param([pscustomobject]$State,[pscustomobject]$Stage)
     if (-not $State -or -not $Stage) { return }
@@ -120,6 +160,14 @@ function Write-StageJournal {
         }
 
         $outPath = Join-Path $journalDir ("stage_{0}.json" -f $Stage.stage_id)
+        $maxJournalSizeKB = 1024
+        if (Test-Path $outPath) {
+            $currentSizeKB = [math]::Round(((Get-Item $outPath).Length / 1KB), 2)
+            if ($currentSizeKB -gt $maxJournalSizeKB) {
+                $archive = $outPath -replace '\.json$', ("_{0}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+                Move-Item -Path $outPath -Destination $archive -Force
+            }
+        }
         $entry | ConvertTo-Json -Depth 12 | Set-Content -Path $outPath -Encoding UTF8
         if (-not ($Stage.artifacts -contains $outPath)) { $Stage.artifacts.Add($outPath) }
     } catch {
@@ -291,6 +339,16 @@ function Add-NormalizedEventsFromResult {
     $catalog = Get-SignatureCatalog
     $policy = Get-DecisionPolicy
 
+    if (-not $script:CompiledRegexCache) {
+        $script:CompiledRegexCache = @{}
+    }
+    foreach ($sig in $catalog) {
+        if (-not $sig.regex) { continue }
+        if (-not $script:CompiledRegexCache.ContainsKey($sig.signature)) {
+            $script:CompiledRegexCache[$sig.signature] = [regex]::new([string]$sig.regex, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        }
+    }
+
     if (-not $Result.ExitCodeCaptured) {
         $sig = $catalog | Where-Object { $_.signature -eq 'EXIT_CODE_NOT_CAPTURED' } | Select-Object -First 1
         Add-NormalizedEvent -State $State -StageId $StageId -Tool $tool -Severity $sig.severity -Signature $sig.signature -Category $sig.category -Raw $Result.CommandLine -Hint $sig.hint -NextAction $sig.next_action
@@ -304,7 +362,8 @@ function Add-NormalizedEventsFromResult {
     foreach ($line in $lines) {
         foreach ($sig in $catalog) {
             if (-not $sig.regex) { continue }
-            if ($line -match $sig.regex) {
+            $regex = $script:CompiledRegexCache[$sig.signature]
+            if ($regex -and $regex.IsMatch($line)) {
                 if ($sig.tool -ne 'generic' -and $sig.tool -ne $tool -and $sig.tool -ne 'powershell') { continue }
                 Add-NormalizedEvent -State $State -StageId $StageId -Tool $tool -Severity $sig.severity -Signature $sig.signature -Category $sig.category -Raw $line -Hint $sig.hint -NextAction $sig.next_action
                 $decision = 'suggest_manual_action'
@@ -533,18 +592,27 @@ function Run-StageReadiness {
     }
 
     $critical = 'TrustedInstaller','wuauserv','bits','cryptsvc'
+    $allServices = @(Get-Service -Name $critical -ErrorAction SilentlyContinue)
+    $serviceMap = @{}
+    foreach ($svc in $allServices) { $serviceMap[$svc.Name] = $svc }
+
     foreach ($svcName in $critical) {
-        try {
-            $svc = Get-Service -Name $svcName -ErrorAction Stop
-            $stage.findings.Add("Service $svcName state=$($svc.Status)")
-            if ($svcName -eq 'TrustedInstaller' -and $svc.Status -ne 'Running') {
+        $svc = $serviceMap[$svcName]
+        if (-not $svc) {
+            $stage.findings.Add("Service check failed: $svcName => not found")
+            continue
+        }
+
+        $stage.findings.Add("Service $svcName state=$($svc.Status)")
+        if ($svcName -eq 'TrustedInstaller' -and $svc.Status -ne 'Running') {
+            try {
                 Start-Service -Name $svcName -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 1
-                $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-                $stage.findings.Add("Service $svcName after start attempt=$($svc.Status)")
+                $svcAfter = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+                if ($svcAfter) { $stage.findings.Add("Service $svcName after start attempt=$($svcAfter.Status)") }
+            } catch {
+                $stage.findings.Add("Service check failed: $svcName => $($_.Exception.Message)")
             }
-        } catch {
-            $stage.findings.Add("Service check failed: $svcName => $($_.Exception.Message)")
         }
     }
 

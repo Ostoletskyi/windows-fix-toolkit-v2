@@ -54,3 +54,30 @@ function Write-ToolkitLog {
         }
     }
 }
+
+
+function Write-StructuredLog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][pscustomobject]$State,
+        [ValidateSet('INFO','WARN','ERROR','DEBUG','METRICS')]
+        [string]$Level = 'INFO',
+        [Parameter(Mandatory)][string]$Message,
+        [hashtable]$Properties = @{}
+    )
+
+    $entry = [ordered]@{
+        timestamp = (Get-Date).ToString('o')
+        level = $Level
+        message = $Message
+        stage = if ($State.Stages.Count -gt 0) { $State.Stages[$State.Stages.Count-1].stage_id } else { 'none' }
+        thread_id = [Threading.Thread]::CurrentThread.ManagedThreadId
+    }
+
+    foreach ($key in $Properties.Keys) {
+        $entry[$key] = $Properties[$key]
+    }
+
+    $json = $entry | ConvertTo-Json -Compress
+    Write-ToolkitLog -State $State -Level $Level -Message $json
+}
