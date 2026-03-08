@@ -1183,6 +1183,7 @@ function Export-ToolkitReport {
         sourceValidationPassed = [bool]$State.Context['deep_source_valid']
         safeToReboot = -not [bool]$State.Context['pending_reboot']
         finalConfidence = (Get-RootCauseSummary -State $State).confidence
+        deepRecovery = if ($State.Context['deepRecovery'] -and $State.Context['deepRecovery']['scaffoldReport']) { $State.Context['deepRecovery']['scaffoldReport'] } else { $null }
     }
 
     $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $jsonPath -Encoding UTF8
@@ -1232,6 +1233,16 @@ function Export-ToolkitReport {
         foreach ($pd in ($payload.policyDecisions | Select-Object -First 20)) {
             $lines += "- [$($pd.stage)] $($pd.decision): $($pd.reason)"
         }
+    }
+
+    if ($payload.deepRecovery) {
+        $lines += ''
+        $lines += '## Deep Recovery (step report)'
+        $lines += "- OverallStatus: $($payload.deepRecovery.overallStatus)"
+        $lines += "- PreflightClassification: $($payload.deepRecovery.preflightResult.classification)"
+        $lines += "- SafeguardCheckClassification: $($payload.deepRecovery.safeguardCheckResult.classification)"
+        $lines += "- SafeguardResultClassification: $($payload.deepRecovery.safeguardResult.classification)"
+        $lines += "- RequiresStrongAck: $($payload.deepRecovery.requiresStrongAck)"
     }
 
     Set-Content -Path $mdPath -Value $lines -Encoding UTF8

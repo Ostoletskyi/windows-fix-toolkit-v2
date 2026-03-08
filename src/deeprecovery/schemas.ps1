@@ -1,9 +1,43 @@
+function New-DeepRecoveryPreflightResultTemplate {
+    [pscustomobject]@{
+        classification = 'unknown'
+        isElevated = $false
+        os = [pscustomobject]@{
+            family = 'Unknown'
+            edition = 'Unknown'
+            architecture = 'Unknown'
+            build = 'Unknown'
+            version = 'Unknown'
+            uiLanguage = 'unknown'
+        }
+        pendingReboot = $false
+        internetConnectivity = $false
+        systemDriveFreeGb = 0.0
+        winREStatus = 'Unknown'
+        isLaptop = $false
+        onACPower = $null
+        warnings = @()
+        blockingIssues = @()
+    }
+}
+
 function New-DeepRecoverySafeguardResultTemplate {
     [pscustomobject]@{
+        osFamily = 'Unknown'
         available = $false
+        attempted = $false
         status = 'NOT_ATTEMPTED'
+        classification = 'unknown'
         type = 'none'
-        reason = 'scaffold'
+        reason = 'not_evaluated'
+        capabilities = [pscustomobject]@{
+            systemDrive = 'C:'
+            systemRestoreCmdletsAvailable = $false
+            alreadyEnabledOnSystemDrive = $false
+            policyDisabled = $false
+            wbadminAvailable = $false
+            backupTargetDetected = $false
+        }
         details = @()
     }
 }
@@ -34,7 +68,7 @@ function New-DeepRecoveryStageResultTemplate {
         endedAt = (Get-Date)
         decisions = @()
         findings = @()
-        recommendations = @('Step 1 scaffold: implementation deferred to next step')
+        recommendations = @()
         artifacts = @()
         error = $null
     }
@@ -43,12 +77,15 @@ function New-DeepRecoveryStageResultTemplate {
 function New-DeepRecoveryFinalReportTemplate {
     [pscustomobject]@{
         feature = 'Deep Recovery (Official Microsoft Source)'
-        scaffoldStep = 1
+        step = 2
         phases = @()
+        preflightResult = New-DeepRecoveryPreflightResultTemplate
+        safeguardCheckResult = New-DeepRecoverySafeguardResultTemplate
         safeguardResult = New-DeepRecoverySafeguardResultTemplate
         sourceValidationResult = New-DeepRecoverySourceValidationResultTemplate
         overallStatus = 'PLANNED'
+        requiresStrongAck = $false
         confidence = 'low'
-        nextStep = 'Step 2: preflight+safeguard implementation'
+        nextStep = 'Step 3: source discovery/validation and repair execution'
     }
 }

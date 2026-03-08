@@ -22,10 +22,14 @@ function Invoke-DeepRecoveryScaffold {
     $State.Context['deepRecovery']['phasePlan'] = $phases
     $State.Context['deepRecovery']['phaseTransitions'] = New-Object System.Collections.Generic.List[object]
 
+    $preflightPhase = Invoke-DeepRecoveryPreflightPhase -State $State
+    $checkPhase = Invoke-DeepRecoverySafeguardCheckPhase -State $State
+    $attemptPhase = Invoke-DeepRecoverySafeguardAttemptPhase -State $State
+
     $phaseResults = @(
-        Invoke-DeepRecoveryPreflightPhase -State $State,
-        Invoke-DeepRecoverySafeguardCheckPhase -State $State,
-        Invoke-DeepRecoverySafeguardAttemptPhase -State $State,
+        $preflightPhase,
+        $checkPhase,
+        $attemptPhase,
         Invoke-DeepRecoverySourceDiscoveryPhase -State $State,
         Invoke-DeepRecoverySourceValidationPhase -State $State,
         Invoke-DeepRecoveryDismPhase -State $State,
@@ -45,12 +49,34 @@ function Invoke-DeepRecoveryScaffold {
         })
     }
 
+    if ($State.Context['deepRecovery']['preflightResult']) {
+        $report.preflightResult = $State.Context['deepRecovery']['preflightResult']
+    }
+    if ($State.Context['deepRecovery']['safeguardCheckResult']) {
+        $report.safeguardCheckResult = $State.Context['deepRecovery']['safeguardCheckResult']
+    }
+    if ($State.Context['deepRecovery']['safeguardResult']) {
+        $report.safeguardResult = $State.Context['deepRecovery']['safeguardResult']
+    }
+
+    $report.requiresStrongAck = [bool]$State.Context['deepRecovery']['requiresStrongAck']
+
+    $hasFail = @($phaseResults | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0
+    $hasWarn = @($phaseResults | Where-Object { $_.status -eq 'WARN' }).Count -gt 0
+    $report.overallStatus = if ($hasFail) { 'FAIL' } elseif ($hasWarn) { 'WARN' } else { 'OK' }
+
     Set-DeepRecoveryScaffoldState -State $State -Report $report
 
     $stage = New-Stage 'DR-S0' 'Deep Recovery scaffold orchestration'
-    $stage.findings.Add('Step 1 scaffold executed. Deep Recovery repair actions are intentionally stubbed.')
-    $stage.findings.Add('No DISM/SFC/source-acquisition/reinstall actions are executed in this step.')
-    $stage.recommendations.Add('Proceed to Step 2 to implement preflight and safeguard behavior.')
-    Complete-Stage -State $State -Stage $stage -Status 'OK' -ExitCode 0
-    return 0
+    $stage.findings.Add("Preflight classification: $($report.preflightResult.classification)")
+    $stage.findings.Add("Safeguard classification: $($report.safeguardResult.classification)")
+    if ($report.requiresStrongAck) {
+        $stage.findings.Add('Rollback safeguard could not be guaranteed; stronger acknowledgement is required in later phases.')
+        $stage.recommendations.Add('Do not continue to source/repair phases without explicit stronger acknowledgement.')
+    }
+    $stage.recommendations.Add('Step 2 completed: preflight+safeguard logic implemented; later phases remain stubs.')
+
+    $status = if ($hasFail) { 'FAIL' } elseif ($hasWarn) { 'WARN' } else { 'OK' }
+    Complete-Stage -State $State -Stage $stage -Status $status -ExitCode ($(if($hasFail){1}else{0}))
+    return ($(if($hasFail){1}else{0}))
 }
