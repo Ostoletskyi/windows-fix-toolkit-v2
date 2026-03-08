@@ -160,8 +160,24 @@ function Complete-Stage {
     $Stage.exit_code = $ExitCode
     $Stage.end_time = Get-Date
     $Stage.duration_ms = [int](($Stage.end_time - $Stage.start_time).TotalMilliseconds)
+
     $State.Stages.Add($Stage)
-    $State.Steps.Add([pscustomobject]@{ name=$Stage.stage_name; status=$Status; exitCode=$ExitCode; durationMs=[int](($Stage.end_time-$Stage.start_time).TotalMilliseconds); details=($Stage.findings -join ' | ') })
+
+    $findingsArr = @(Convert-ToArray -Value $Stage.findings)
+    $details = if ($findingsArr.Count -gt 0) { (($findingsArr | ForEach-Object { [string]$_ }) -join ' | ') } else { '' }
+
+    try {
+        $State.Steps.Add([pscustomobject]@{
+            name = [string]$Stage.stage_name
+            status = [string]$Status
+            exitCode = (Convert-ToSafeInt -Value $ExitCode)
+            durationMs = (Convert-ToSafeInt -Value $Stage.duration_ms)
+            details = $details
+        })
+    } catch {
+        Write-ToolkitLog -State $State -Level WARN -Message "Failed to append stage summary for $($Stage.stage_id): $($_.Exception.Message)"
+    }
+
     Write-StageJournal -State $State -Stage $Stage
 }
 
@@ -1363,9 +1379,12 @@ function Invoke-WindowsFix {
 
         return $exitCode
     } catch {
-        Write-ToolkitLog -State $state -Level ERROR -Message $_.Exception.Message
+        $ex = $_.Exception
+        $stack = $_.ScriptStackTrace
+        $position = $_.InvocationInfo.PositionMessage
+        Write-ToolkitLog -State $state -Level ERROR -Message ("Unhandled exception type={0}; message={1}; position={2}; stack={3}" -f $ex.GetType().FullName, $ex.Message, $position, $stack)
         $errStage = New-Stage 'X' 'Unhandled exception'
-        $errStage.findings.Add($_.Exception.Message)
+        $errStage.findings.Add($ex.Message)
         Complete-Stage -State $state -Stage $errStage -Status 'FAIL' -ExitCode 3
         try {
             $report = Export-ToolkitReport -State $state
