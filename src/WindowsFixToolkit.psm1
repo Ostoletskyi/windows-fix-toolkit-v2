@@ -143,20 +143,38 @@ function Write-StageJournal {
         $events = @($State.Context['normalized_events'] | Where-Object { $_.stage -eq $Stage.stage_id })
         $decisions = @($State.Context['policy_decisions'] | Where-Object { $_.stage -eq $Stage.stage_id })
 
+        $matchedSignatures = @()
+        foreach ($ev in $events) {
+            if ($ev -and $ev.PSObject.Properties.Name -contains 'signature') {
+                $sig = [string]$ev.signature
+                if ($sig -and -not ($matchedSignatures -contains $sig)) {
+                    $matchedSignatures += $sig
+                }
+            }
+        }
+
+        $lastDecision = 'none'
+        if ($decisions.Count -gt 0) {
+            $last = $decisions | Select-Object -Last 1
+            if ($last -and $last.PSObject.Properties.Name -contains 'decision') {
+                $lastDecision = [string]$last.decision
+            }
+        }
+
         $entry = [pscustomobject]@{
-            stage = $Stage.stage_id
-            stageName = $Stage.stage_name
-            status = $Stage.status
-            exitCode = $Stage.exit_code
+            stage = [string]$Stage.stage_id
+            stageName = [string]$Stage.stage_name
+            status = [string]$Stage.status
+            exitCode = [int]$Stage.exit_code
             startTime = $Stage.start_time
             endTime = $Stage.end_time
-            durationMs = $Stage.duration_ms
+            durationMs = [int]$Stage.duration_ms
             actions = @($Stage.actions)
-            matchedSignatures = @($events | Select-Object -ExpandProperty signature -Unique)
-            decision = if ($decisions.Count -gt 0) { $decisions[-1].decision } else { 'none' }
-            humanSummary = if ($Stage.findings.Count -gt 0) { $Stage.findings[0] } else { "Stage $($Stage.stage_id) completed with status $($Stage.status)" }
-            normalizedEvents = $events
-            policyDecisions = $decisions
+            matchedSignatures = @($matchedSignatures)
+            decision = $lastDecision
+            humanSummary = if ($Stage.findings.Count -gt 0) { [string]$Stage.findings[0] } else { "Stage $($Stage.stage_id) completed with status $($Stage.status)" }
+            normalizedEvents = @($events)
+            policyDecisions = @($decisions)
         }
 
         $outPath = Join-Path $journalDir ("stage_{0}.json" -f $Stage.stage_id)
@@ -169,7 +187,13 @@ function Write-StageJournal {
             }
         }
         $entry | ConvertTo-Json -Depth 12 | Set-Content -Path $outPath -Encoding UTF8
-        if (-not ($Stage.artifacts -contains $outPath)) { $Stage.artifacts.Add($outPath) }
+
+        try {
+            $artifactPath = [string]$outPath
+            if ($artifactPath -and -not ($Stage.artifacts -contains $artifactPath)) {
+                $Stage.artifacts.Add($artifactPath)
+            }
+        } catch {}
     } catch {
         if ($State) { Write-ToolkitLog -State $State -Level WARN -Message "Failed to write stage journal for $($Stage.stage_id): $($_.Exception.Message)" }
     }
@@ -339,7 +363,7 @@ function Add-NormalizedEventsFromResult {
     $catalog = Get-SignatureCatalog
     $policy = Get-DecisionPolicy
 
-    if (-not $script:CompiledRegexCache) {
+    if (-not (Get-Variable -Name CompiledRegexCache -Scope Script -ErrorAction SilentlyContinue)) {
         $script:CompiledRegexCache = @{}
     }
     foreach ($sig in $catalog) {

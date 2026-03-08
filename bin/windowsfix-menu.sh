@@ -239,25 +239,31 @@ offer_open_analysis_file() {
   fi
 
   echo "[HINT] Для ускорения диагностики откройте файл: $candidate"
-  read -r -p "Open this file now? (y/N): " ans
-  if [[ "${ans,,}" != "y" ]]; then
-    return 0
-  fi
 
+  local opened=0
   if command -v powershell.exe >/dev/null 2>&1; then
-    powershell.exe -NoProfile -Command "Start-Process -FilePath '$candidate'" >/dev/null 2>&1 || true
-    echo "[INFO] Open command sent."
+    local open_target="$candidate"
+    if command -v cygpath >/dev/null 2>&1; then
+      open_target="$(cygpath -w "$candidate")"
+    fi
+    powershell.exe -NoProfile -Command "Start-Process -FilePath '$open_target'" >/dev/null 2>&1 && opened=1 || true
+  fi
+
+  if [[ "$opened" == "0" ]] && command -v cygstart >/dev/null 2>&1; then
+    cygstart "$candidate" >/dev/null 2>&1 && opened=1 || true
+  fi
+
+  if [[ "$opened" == "1" ]]; then
+    echo "[INFO] Open command sent automatically."
     return 0
   fi
 
-  if command -v cygstart >/dev/null 2>&1; then
-    cygstart "$candidate" >/dev/null 2>&1 || true
-    echo "[INFO] Open command sent."
-    return 0
+  read -r -p "Auto-open failed. Open this file now manually? (y/N): " ans
+  if [[ "${ans,,}" == "y" ]]; then
+    echo "[INFO] Open manually: $candidate"
   fi
-
-  echo "[WARN] Авто-открытие недоступно. Откройте вручную: $candidate"
 }
+
 
 run_toolkit() {
   local mode="$1"
