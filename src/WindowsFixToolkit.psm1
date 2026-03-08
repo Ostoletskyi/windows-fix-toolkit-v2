@@ -25,7 +25,8 @@ function New-ToolkitState {
         [string]$RepairProfile = 'Normal',
         [ValidateSet('Quick','Normal','Deep')]
         [string]$DiagnoseProfile = 'Normal',
-        [switch]$UiVerbose
+        [switch]$UiVerbose,
+        [int]$KeepOutputRuns = 5
     )
 
     New-Item -ItemType Directory -Path $ReportPath -Force | Out-Null
@@ -54,6 +55,7 @@ function New-ToolkitState {
         RepairProfile = $RepairProfile
         DiagnoseProfile = $DiagnoseProfile
         UiVerbose = [bool]$UiVerbose
+        KeepOutputRuns = $KeepOutputRuns
         StartedAt      = (Get-Date)
         IsAdmin        = (Test-IsAdmin)
         Stages         = New-Object System.Collections.Generic.List[object]
@@ -88,6 +90,76 @@ function Complete-Stage {
     $Stage.duration_ms = [int](($Stage.end_time - $Stage.start_time).TotalMilliseconds)
     $State.Stages.Add($Stage)
     $State.Steps.Add([pscustomobject]@{ name=$Stage.stage_name; status=$Status; exitCode=$ExitCode; durationMs=[int](($Stage.end_time-$Stage.start_time).TotalMilliseconds); details=($Stage.findings -join ' | ') })
+    Write-StageJournal -State $State -Stage $Stage
+}
+
+function Write-StageJournal {
+    param([pscustomobject]$State,[pscustomobject]$Stage)
+    if (-not $State -or -not $Stage) { return }
+    try {
+        $journalDir = Join-Path $State.ReportPath 'journal'
+        New-Item -ItemType Directory -Path $journalDir -Force | Out-Null
+
+        $events = @($State.Context['normalized_events'] | Where-Object { $_.stage -eq $Stage.stage_id })
+        $decisions = @($State.Context['policy_decisions'] | Where-Object { $_.stage -eq $Stage.stage_id })
+
+        $entry = [pscustomobject]@{
+            stage = $Stage.stage_id
+            stageName = $Stage.stage_name
+            status = $Stage.status
+            exitCode = $Stage.exit_code
+            startTime = $Stage.start_time
+            endTime = $Stage.end_time
+            durationMs = $Stage.duration_ms
+            actions = @($Stage.actions)
+            matchedSignatures = @($events | Select-Object -ExpandProperty signature -Unique)
+            decision = if ($decisions.Count -gt 0) { $decisions[-1].decision } else { 'none' }
+            humanSummary = if ($Stage.findings.Count -gt 0) { $Stage.findings[0] } else { "Stage $($Stage.stage_id) completed with status $($Stage.status)" }
+            normalizedEvents = $events
+            policyDecisions = $decisions
+        }
+
+        $outPath = Join-Path $journalDir ("stage_{0}.json" -f $Stage.stage_id)
+        $entry | ConvertTo-Json -Depth 12 | Set-Content -Path $outPath -Encoding UTF8
+        if (-not ($Stage.artifacts -contains $outPath)) { $Stage.artifacts.Add($outPath) }
+    } catch {
+        if ($State) { Write-ToolkitLog -State $State -Level WARN -Message "Failed to write stage journal for $($Stage.stage_id): $($_.Exception.Message)" }
+    }
+}
+
+function Cleanup-OldOutputFolders {
+    param([pscustomobject]$State)
+    try {
+        $keep = [int]$State.KeepOutputRuns
+        if ($keep -lt 1) { $keep = 1 }
+        $outputsRoot = Split-Path -Parent $State.ReportPath
+        if (-not (Test-Path $outputsRoot)) { return }
+
+        $dirs = @(Get-ChildItem -Path $outputsRoot -Directory -Filter 'WindowsFix_*' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending)
+        if ($dirs.Count -le $keep) { return }
+
+        $toDelete = $dirs[$keep..($dirs.Count-1)]
+        foreach ($d in $toDelete) {
+            if ($d.FullName -eq $State.ReportPath) { continue }
+            try {
+                Remove-Item -Path $d.FullName -Recurse -Force -ErrorAction Stop
+                Write-ToolkitLog -State $State -Message "[CLEANUP] removed old output folder: $($d.FullName)"
+            } catch {
+                Write-ToolkitLog -State $State -Level WARN -Message "[CLEANUP] failed to remove old output folder: $($d.FullName) :: $($_.Exception.Message)"
+            }
+        }
+    } catch {
+        Write-ToolkitLog -State $State -Level WARN -Message "[CLEANUP] failed: $($_.Exception.Message)"
+    }
+}
+
+function Resolve-SignatureCatalogPath {
+    return Join-Path $PSScriptRoot 'config/error-signatures.json'
+}
+
+function Resolve-DecisionPolicyPath {
+    return Join-Path $PSScriptRoot 'config/decision-policy.json'
 }
 
 function Add-ActionResult {
@@ -101,6 +173,7 @@ function Add-ActionResult {
     $Stage.actions.Add([pscustomobject]@{
         name = $Name
         commandLine = $Result.CommandLine
+        args = @($Result.Arguments)
         process_id = $Result.ProcessId
         launch_mode = $Result.LaunchMode
         exit_code = $Result.ExitCode
@@ -118,14 +191,39 @@ function Add-ActionResult {
 }
 
 function Get-SignatureCatalog {
+    $path = Resolve-SignatureCatalogPath
+    try {
+        if (Test-Path $path) {
+            $loaded = Get-Content -Raw -Path $path | ConvertFrom-Json
+            if ($loaded) { return @($loaded) }
+        }
+    } catch {}
+
     @(
-        [pscustomobject]@{ signature='DISM_SOURCE_MISSING'; regex='0x800f081f|source files could not be found'; tool='dism'; severity='error'; hint='DISM source is unavailable.'; next_action='retry_with_source_or_abort' },
-        [pscustomobject]@{ signature='ACCESS_DENIED'; regex='Access is denied|0x80070005'; tool='generic'; severity='error'; hint='Permission/elevation issue.'; next_action='relaunch_elevated_or_unlock' },
-        [pscustomobject]@{ signature='WRP_CORRUPTION_FOUND'; regex='Windows Resource Protection found corrupt files'; tool='sfc'; severity='warning'; hint='SFC found corruption.'; next_action='review_repairability_then_reboot' },
-        [pscustomobject]@{ signature='DISM_COMPONENT_REPAIRABLE'; regex='component store is repairable|repairable'; tool='dism'; severity='warning'; hint='Component store corruption is repairable.'; next_action='run_restorehealth' },
-        [pscustomobject]@{ signature='ARGUMENTLIST_NULL'; regex='ArgumentList.*null|cannot bind argument'; tool='powershell'; severity='fatal'; hint='Wrapper argument construction bug.'; next_action='abort_and_fix_tooling' },
-        [pscustomobject]@{ signature='EXIT_CODE_NOT_CAPTURED'; regex=''; tool='internal'; severity='warning'; hint='External process finished but exit code was not captured.'; next_action='mark_unverified_and_retry' }
+        [pscustomobject]@{ signature='DISM_SOURCE_MISSING'; regex='0x800f081f|source files could not be found'; tool='dism'; severity='error'; category='system'; hint='DISM source is unavailable.'; next_action='retry_with_source_or_abort' },
+        [pscustomobject]@{ signature='ACCESS_DENIED'; regex='Access is denied|0x80070005'; tool='generic'; severity='error'; category='permissions'; hint='Permission/elevation issue.'; next_action='relaunch_elevated_or_unlock' },
+        [pscustomobject]@{ signature='WRP_CORRUPTION_FOUND'; regex='Windows Resource Protection found corrupt files'; tool='sfc'; severity='warning'; category='system'; hint='SFC found corruption.'; next_action='review_repairability_then_reboot' },
+        [pscustomobject]@{ signature='DISM_COMPONENT_REPAIRABLE'; regex='component store is repairable|repairable'; tool='dism'; severity='warning'; category='system'; hint='Component store corruption is repairable.'; next_action='run_restorehealth' },
+        [pscustomobject]@{ signature='POWERSHELL_ARGUMENTLIST_NULL'; regex='ArgumentList.*null|cannot bind argument'; tool='powershell'; severity='fatal'; category='internal'; hint='Wrapper argument construction bug.'; next_action='abort_and_fix_tooling' },
+        [pscustomobject]@{ signature='EXIT_CODE_NOT_CAPTURED'; regex=''; tool='internal'; severity='warning'; category='internal'; hint='External process finished but exit code was not captured.'; next_action='mark_unverified_and_retry' }
     )
+}
+
+function Get-DecisionPolicy {
+    $path = Resolve-DecisionPolicyPath
+    try {
+        if (Test-Path $path) {
+            $loaded = Get-Content -Raw -Path $path | ConvertFrom-Json -AsHashtable
+            if ($loaded) { return $loaded }
+        }
+    } catch {}
+
+    return @{
+        'DISM_SOURCE_MISSING' = @{ severity='error'; category='system'; action='fallback_or_abort'; retry_allowed=$false; requires_source=$true }
+        'POWERSHELL_ARGUMENTLIST_NULL' = @{ severity='fatal'; category='internal'; action='abort_pipeline'; retry_allowed=$false; requires_code_fix=$true }
+        'EXIT_CODE_NOT_CAPTURED' = @{ severity='warning'; category='internal'; action='retry'; retry_allowed=$true; requires_code_fix=$true }
+        'ACCESS_DENIED' = @{ severity='error'; category='permissions'; action='relaunch_elevated_or_unlock'; retry_allowed=$true; requires_code_fix=$false }
+    }
 }
 
 function Add-NormalizedEvent {
@@ -135,6 +233,7 @@ function Add-NormalizedEvent {
         [string]$Tool,
         [string]$Severity,
         [string]$Signature,
+        [string]$Category = 'system',
         [string]$Raw,
         [string]$Hint,
         [string]$NextAction
@@ -148,6 +247,7 @@ function Add-NormalizedEvent {
         tool = $Tool
         severity = $Severity
         signature = $Signature
+        category = $Category
         raw = $Raw
         hint = $Hint
         next_action = $NextAction
@@ -189,11 +289,13 @@ function Add-NormalizedEventsFromResult {
     if (-not $State -or -not $Result) { return }
     $tool = Get-ToolNameFromCommand -Result $Result
     $catalog = Get-SignatureCatalog
+    $policy = Get-DecisionPolicy
 
     if (-not $Result.ExitCodeCaptured) {
         $sig = $catalog | Where-Object { $_.signature -eq 'EXIT_CODE_NOT_CAPTURED' } | Select-Object -First 1
-        Add-NormalizedEvent -State $State -StageId $StageId -Tool $tool -Severity $sig.severity -Signature $sig.signature -Raw $Result.CommandLine -Hint $sig.hint -NextAction $sig.next_action
-        Register-PolicyDecision -State $State -StageId $StageId -Decision 'retry' -Reason 'Exit code not captured' -Evidence $Result.CommandLine
+        Add-NormalizedEvent -State $State -StageId $StageId -Tool $tool -Severity $sig.severity -Signature $sig.signature -Category $sig.category -Raw $Result.CommandLine -Hint $sig.hint -NextAction $sig.next_action
+        $decision = if ($policy.ContainsKey('EXIT_CODE_NOT_CAPTURED')) { [string]$policy['EXIT_CODE_NOT_CAPTURED'].action } else { 'retry' }
+        Register-PolicyDecision -State $State -StageId $StageId -Decision $decision -Reason 'Exit code not captured' -Evidence $Result.CommandLine
     }
 
     $lines = @()
@@ -204,8 +306,15 @@ function Add-NormalizedEventsFromResult {
             if (-not $sig.regex) { continue }
             if ($line -match $sig.regex) {
                 if ($sig.tool -ne 'generic' -and $sig.tool -ne $tool -and $sig.tool -ne 'powershell') { continue }
-                Add-NormalizedEvent -State $State -StageId $StageId -Tool $tool -Severity $sig.severity -Signature $sig.signature -Raw $line -Hint $sig.hint -NextAction $sig.next_action
-                $decision = if ($sig.severity -eq 'fatal') { 'abort' } elseif ($sig.signature -eq 'DISM_SOURCE_MISSING') { 'fallback' } elseif ($sig.signature -eq 'DISM_COMPONENT_REPAIRABLE') { 'continue' } else { 'suggest_manual_action' }
+                Add-NormalizedEvent -State $State -StageId $StageId -Tool $tool -Severity $sig.severity -Signature $sig.signature -Category $sig.category -Raw $line -Hint $sig.hint -NextAction $sig.next_action
+                $decision = 'suggest_manual_action'
+                if ($policy.ContainsKey($sig.signature)) {
+                    $decision = [string]$policy[$sig.signature].action
+                } elseif ($sig.severity -eq 'fatal') {
+                    $decision = 'abort'
+                } elseif ($sig.signature -eq 'DISM_COMPONENT_REPAIRABLE') {
+                    $decision = 'continue'
+                }
                 Register-PolicyDecision -State $State -StageId $StageId -Decision $decision -Reason $sig.signature -Evidence $line
             }
         }
@@ -629,6 +738,27 @@ function Run-StageFinalSummary {
     return 0
 }
 
+function Get-RootCauseSummary {
+    param([pscustomobject]$State)
+    $events = @($State.Context['normalized_events'])
+    if ($events.Count -eq 0) {
+        return [pscustomobject]@{ rootCause='No strong signature matched'; affectedStage='unknown'; systemState='unknown'; confidence='low'; recommendedFix='Review toolkit.log and report.md' }
+    }
+    $chosen = $events | Where-Object { $_.category -eq 'internal' -and $_.severity -in @('fatal','error') } | Select-Object -First 1
+    if (-not $chosen) { $chosen = $events | Where-Object { $_.severity -in @('fatal','error') } | Select-Object -First 1 }
+    if (-not $chosen) { $chosen = $events | Select-Object -First 1 }
+
+    $sysState = if ($chosen.category -eq 'internal') { 'unknown, execution reliability impacted' } else { 'degraded' }
+    $confidence = if ($chosen.signature -eq 'EXIT_CODE_NOT_CAPTURED') { 'medium' } else { 'high' }
+    return [pscustomobject]@{
+        rootCause = $chosen.signature
+        affectedStage = $chosen.stage
+        systemState = $sysState
+        confidence = $confidence
+        recommendedFix = $chosen.next_action
+    }
+}
+
 function Export-ToolkitReport {
     [CmdletBinding()]
     param([Parameter(Mandatory)][pscustomobject]$State)
@@ -651,6 +781,7 @@ function Export-ToolkitReport {
         steps     = $State.Steps
         normalizedEvents = @($State.Context['normalized_events'])
         policyDecisions = @($State.Context['policy_decisions'])
+        rootCauseSummary = Get-RootCauseSummary -State $State
     }
 
     $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $jsonPath -Encoding UTF8
@@ -681,6 +812,14 @@ function Export-ToolkitReport {
             $lines += "- [$($ev.stage)] $($ev.tool) $($ev.severity) $($ev.signature): $($ev.hint)"
         }
     }
+
+    $lines += ''
+    $lines += '## Post-run diagnosis summary'
+    $lines += "- Root cause: $($payload.rootCauseSummary.rootCause)"
+    $lines += "- Affected stage: $($payload.rootCauseSummary.affectedStage)"
+    $lines += "- System state: $($payload.rootCauseSummary.systemState)"
+    $lines += "- Confidence: $($payload.rootCauseSummary.confidence)"
+    $lines += "- Recommended fix: $($payload.rootCauseSummary.recommendedFix)"
 
     if ($payload.policyDecisions.Count -gt 0) {
         $lines += ''
@@ -715,11 +854,13 @@ function Invoke-WindowsFix {
         [string]$RepairProfile = 'Normal',
         [ValidateSet('Quick','Normal','Deep')]
         [string]$DiagnoseProfile = 'Normal',
-        [switch]$UiVerbose
+        [switch]$UiVerbose,
+        [int]$KeepOutputRuns = 5
     )
 
-    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile -UiVerbose:$UiVerbose
+    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile -UiVerbose:$UiVerbose -KeepOutputRuns $KeepOutputRuns
     Write-ToolkitLog -State $state -Message "Mode=$Mode, EffectiveMode=$($state.EffectiveMode), IsAdmin=$($state.IsAdmin), ReportPath=$ReportPath"
+    Cleanup-OldOutputFolders -State $state
 
     $exitCode = 0
     try {
