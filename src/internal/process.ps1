@@ -19,8 +19,9 @@ function ConvertTo-CommandLine {
 
 function Test-UseSeparateServiceWindow {
     param([string]$FilePath)
-    $leaf = [System.IO.Path]::GetFileName($FilePath).ToLowerInvariant()
-    return @('sfc.exe','dism.exe','chkdsk.exe') -contains $leaf
+    # Reliability-first: run all commands in captured mode to guarantee exit code
+    # and output collection for auditing/reporting.
+    return $false
 }
 
 function Invoke-ExternalCommand {
@@ -162,6 +163,21 @@ function Invoke-ExternalCommand {
         if (-not $timedOut) { $null = $proc.WaitForExit() }
         $exitCode = if ($timedOut) { 124 } else { $proc.ExitCode }
         if ($null -eq $exitCode) { $exitCode = -1 }
+
+        if ($State -and $State.ReportPath) {
+            try {
+                $streamsDir = Join-Path $State.ReportPath 'streams'
+                New-Item -ItemType Directory -Path $streamsDir -Force | Out-Null
+                $stamp = (Get-Date -Format 'yyyyMMdd_HHmmss_fff')
+                $tool = [System.IO.Path]::GetFileNameWithoutExtension($FilePath)
+                $stdoutPath = Join-Path $streamsDir ("{0}_{1}_stdout.log" -f $stamp,$tool)
+                $stderrPath = Join-Path $streamsDir ("{0}_{1}_stderr.log" -f $stamp,$tool)
+                [System.IO.File]::WriteAllText($stdoutPath, $stdout, [System.Text.Encoding]::UTF8)
+                [System.IO.File]::WriteAllText($stderrPath, $stderr, [System.Text.Encoding]::UTF8)
+            } catch {
+                if ($State) { Write-ToolkitLog -State $State -Level WARN -Message "[PROCESS] failed to persist stdout/stderr streams: $($_.Exception.Message)" }
+            }
+        }
     }
 
     $sw.Stop()

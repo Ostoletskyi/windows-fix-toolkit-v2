@@ -14,6 +14,16 @@ function Convert-ToSafeInt {
     try { return [int]$Value } catch { return $Default }
 }
 
+function Convert-ToArray {
+    param($Value)
+    if ($null -eq $Value) { return @() }
+    if ($Value -is [System.Array]) { return @($Value) }
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        return @($Value)
+    }
+    return @($Value)
+}
+
 function New-ToolkitState {
     [CmdletBinding()]
     param(
@@ -154,8 +164,10 @@ function Write-StageJournal {
         $journalDir = Join-Path $State.ReportPath 'journal'
         New-Item -ItemType Directory -Path $journalDir -Force | Out-Null
 
-        $events = @($State.Context['normalized_events'] | Where-Object { $_.stage -eq $Stage.stage_id })
-        $decisions = @($State.Context['policy_decisions'] | Where-Object { $_.stage -eq $Stage.stage_id })
+        $eventsPool = Convert-ToArray -Value $State.Context['normalized_events']
+        $decisionPool = Convert-ToArray -Value $State.Context['policy_decisions']
+        $events = @($eventsPool | Where-Object { $_ -and $_.stage -eq $Stage.stage_id })
+        $decisions = @($decisionPool | Where-Object { $_ -and $_.stage -eq $Stage.stage_id })
 
         $matchedSignatures = @()
         foreach ($ev in $events) {
@@ -183,10 +195,10 @@ function Write-StageJournal {
             startTime = $Stage.start_time
             endTime = $Stage.end_time
             durationMs = (Convert-ToSafeInt -Value $Stage.duration_ms)
-            actions = @($Stage.actions)
+            actions = (Convert-ToArray -Value $Stage.actions)
             matchedSignatures = @($matchedSignatures)
             decision = $lastDecision
-            humanSummary = if ($Stage.findings.Count -gt 0) { [string]$Stage.findings[0] } else { "Stage $($Stage.stage_id) completed with status $($Stage.status)" }
+            humanSummary = if ((Convert-ToArray -Value $Stage.findings).Count -gt 0) { [string](Convert-ToArray -Value $Stage.findings)[0] } else { "Stage $($Stage.stage_id) completed with status $($Stage.status)" }
             normalizedEvents = @($events)
             policyDecisions = @($decisions)
         }
@@ -209,7 +221,7 @@ function Write-StageJournal {
             }
         } catch {}
     } catch {
-        if ($State) { Write-ToolkitLog -State $State -Level WARN -Message "Failed to write stage journal for $($Stage.stage_id): $($_.Exception.Message)" }
+        if ($State) { Write-ToolkitLog -State $State -Level WARN -Message "Failed to write stage journal for $($Stage.stage_id): $($_.Exception.Message); stack=$($_.ScriptStackTrace)" }
     }
 }
 
