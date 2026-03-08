@@ -17,6 +17,7 @@ Windows Fix Toolkit: **утилиты выполняются на PowerShell 5.1
 - `Diagnose`
 - `Repair` (по стадиям readiness -> DISM -> SFC -> subsystem -> postcheck)
 - `Full` (Diagnose + Repair + Post-check)
+- `DeepRecovery` (Official Microsoft Source, double confirmation)
 - `DryRun` (PLANNED-план без изменений)
 
 ## Быстрый старт
@@ -43,7 +44,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\bin\windowsfix.ps1 -Mo
 В `DryRun` шаги показываются как план (`PLANNED`), без реального запуска.
 
 ## Параметры
-- `-Mode Diagnose|Repair|Full|SelfTest|DryRun`
+- `-Mode Diagnose|Repair|Full|DeepRecovery|SelfTest|DryRun`
 - `-ReportPath <path>`
 - `-LogPath <path>`
 - `-NoNetwork`
@@ -111,3 +112,10 @@ Bash оставлен как launcher-меню. Диагностика и рем
 - `Quick`: минимальные проверки + сокращённый snapshot (быстрее).
 - `Normal` (default): сбалансированный набор проверок.
 - `Deep`: расширенный snapshot/валидация (дольше, подробнее).
+
+
+## Deep Recovery (Official Microsoft Source)
+- Отдельный режим с двойным подтверждением в меню (yellow + red gate).
+- Сначала пытается сформировать safeguard (Client: restore point; Server: wbadmin workflow).
+- Затем выполняет source-assisted DISM и SFC, с явной классификацией и policy decisions.
+- Прямая трансплантация файлов в System32/WinSxS/Servicing не используется как primary strategy (unsupported/high-risk).

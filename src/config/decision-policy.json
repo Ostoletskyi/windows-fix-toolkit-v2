@@ -26,5 +26,19 @@
     "action": "relaunch_elevated_or_unlock",
     "retry_allowed": true,
     "requires_code_fix": false
+  },
+  "SOURCE_INDEX_MISMATCH": {
+    "severity": "error",
+    "category": "source",
+    "action": "abort_pipeline",
+    "retry_allowed": false,
+    "requires_matching_media": true
+  },
+  "WINRE_REQUIRED": {
+    "severity": "warning",
+    "category": "environment",
+    "action": "fallback_or_abort",
+    "retry_allowed": false,
+    "requires_winre": true
   }
 }

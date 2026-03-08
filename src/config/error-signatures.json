@@ -52,5 +52,23 @@
     "category": "internal",
     "hint": "External process finished but exit code was not captured.",
     "next_action": "mark_unverified_and_retry"
+  },
+  {
+    "signature": "SOURCE_INDEX_MISMATCH",
+    "regex": "does not match|image version is different|The source and target edition do not match",
+    "tool": "dism",
+    "severity": "error",
+    "category": "source",
+    "hint": "Provided source does not match installed OS edition/build/arch.",
+    "next_action": "select_matching_official_media"
+  },
+  {
+    "signature": "WINRE_REQUIRED",
+    "regex": "offline servicing|Windows Recovery Environment|WinRE",
+    "tool": "dism",
+    "severity": "warning",
+    "category": "environment",
+    "hint": "Repair likely requires offline/WinRE path.",
+    "next_action": "boot_to_winre_and_retry"
   }
 ]

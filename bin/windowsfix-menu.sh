@@ -29,7 +29,43 @@ is_admin() {
 
 mode_requires_admin() {
   local mode="$1"
-  [[ "$mode" == "Repair" || "$mode" == "Full" ]]
+  [[ "$mode" == "Repair" || "$mode" == "Full" || "$mode" == "DeepRecovery" ]]
+}
+
+
+
+supports_color() {
+  [[ -t 1 ]]
+}
+
+warn_yellow() {
+  if supports_color; then printf '[33m%s[0m
+' "$1"; else echo "$1"; fi
+}
+
+warn_red() {
+  if supports_color; then printf '[31m%s[0m
+' "$1"; else echo "$1"; fi
+}
+
+deep_recovery_confirm() {
+  warn_yellow "[WARNING] Deep Recovery (Official Microsoft Source) may modify servicing components and requires trusted source validation."
+  warn_yellow "[WARNING] Use only on severely damaged systems where standard Repair is insufficient."
+  read -r -p "Proceed to second confirmation? Type YES to continue: " first_gate
+  if [[ "$first_gate" != "YES" ]]; then
+    echo "[INFO] Deep Recovery cancelled at first confirmation gate."
+    return 1
+  fi
+
+  warn_red "[DANGER] High-risk mode for third-party machines. If rollback safeguard is unavailable, risk increases."
+  warn_red "[DANGER] Type exactly: I UNDERSTAND THIS MAY CHANGE SYSTEM COMPONENTS"
+  local expected="I UNDERSTAND THIS MAY CHANGE SYSTEM COMPONENTS"
+  read -r -p "> " second_gate
+  if [[ "$second_gate" != "$expected" ]]; then
+    echo "[INFO] Deep Recovery cancelled: explicit acknowledgement mismatch."
+    return 1
+  fi
+  return 0
 }
 
 run_elevated() {
@@ -174,7 +210,13 @@ print_stage_plan() {
   echo "  B) Snapshot"
   echo "  C) Environment validation"
 
-  if [[ "$effective" == "Diagnose" ]]; then
+  if [[ "$mode" == "DeepRecovery" ]]; then
+    echo "  DR-A) Deep environment and servicing preflight"
+    echo "  DR-B) Deep safeguard (restore point / wbadmin)"
+    echo "  DR-C) Official source validation"
+    echo "  DR-D) Source-assisted DISM + SFC"
+    echo "  DR-E) Supported escalation path decision"
+  elif [[ "$effective" == "Diagnose" ]]; then
     echo "  D) Permission / servicing readiness (SKIPPED in Diagnose)"
     echo "  E) Component store repair (SKIPPED in Diagnose)"
     echo "  F) System file repair (SKIPPED in Diagnose)"
@@ -212,6 +254,10 @@ print_mode_banner() {
     Full)
       echo "[INFO] Running full pipeline: Diagnose + Repair + log collection/analysis."
       ;;
+    DeepRecovery)
+      echo "[INFO] Running Deep Recovery (Official Microsoft Source)."
+      echo "[INFO] This mode is conservative, auditable, and requires explicit confirmations."
+      ;;
   esac
 }
 
@@ -246,7 +292,15 @@ offer_open_analysis_file() {
     if command -v cygpath >/dev/null 2>&1; then
       open_target="$(cygpath -w "$candidate")"
     fi
-    powershell.exe -NoProfile -Command "Start-Process -FilePath '$open_target'" >/dev/null 2>&1 && opened=1 || true
+    powershell.exe -NoProfile -Command "try { Start-Process -FilePath '$open_target' -ErrorAction Stop; exit 0 } catch { try { Invoke-Item -LiteralPath '$open_target' -ErrorAction Stop; exit 0 } catch { exit 1 } }" >/dev/null 2>&1 && opened=1 || true
+  fi
+
+  if [[ "$opened" == "0" ]] && command -v cmd.exe >/dev/null 2>&1; then
+    local cmd_target="$candidate"
+    if command -v cygpath >/dev/null 2>&1; then
+      cmd_target="$(cygpath -w "$candidate")"
+    fi
+    cmd.exe /c start "" "$cmd_target" >/dev/null 2>&1 && opened=1 || true
   fi
 
   if [[ "$opened" == "0" ]] && command -v cygstart >/dev/null 2>&1; then
@@ -442,7 +496,8 @@ print_menu() {
     '2) Repair (staged: readiness -> DISM -> SFC -> postcheck)' \
     '3) Full (Diagnose + Repair + Recheck)' \
     '4) DryRun (preview only, no real system changes)' \
-    '5) Custom mode with flags' \
+    '5) Deep Recovery (Official Microsoft Source)' \
+    '6) Custom mode with flags' \
     '0) Exit'
 }
 
@@ -459,9 +514,23 @@ main_menu() {
       3) run_toolkit "Full" ;;
       4) run_toolkit "DryRun" ;;
       5)
-        read -r -p "Mode (Diagnose/Repair/Full/DryRun): " mode
+        if ! deep_recovery_confirm; then
+          read -r -p "Press Enter to continue..." _
+          continue
+        fi
+        local dr_flags=()
+        read -r -p "Recovery source path (ISO mounted path/WIM/ESD, optional): " dr_source
+        if [[ -n "${dr_source:-}" ]]; then
+          dr_flags+=("-RecoverySourcePath" "$dr_source")
+        fi
+        read -r -p "Allow continue without rollback safeguard? (y/N): " dr_no_sg
+        [[ "${dr_no_sg,,}" == "y" ]] && dr_flags+=("-DeepRecoveryAllowNoSafeguard")
+        run_toolkit "DeepRecovery" "${dr_flags[@]}"
+        ;;
+      6)
+        read -r -p "Mode (Diagnose/Repair/Full/DryRun/DeepRecovery): " mode
         case "$mode" in
-          Diagnose|Repair|Full|DryRun) ;;
+          Diagnose|Repair|Full|DryRun|DeepRecovery) ;;
           *)
             echo "[WARN] Invalid mode: $mode"
             read -r -p "Press Enter to continue..." _

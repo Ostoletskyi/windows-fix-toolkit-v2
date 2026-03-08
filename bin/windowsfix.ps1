@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Diagnose','Repair','Full','DryRun')]
+    [ValidateSet('Diagnose','Repair','Full','DryRun','DeepRecovery')]
     [string]$Mode = 'Diagnose',
     [string]$ReportPath,
     [string]$LogPath,
@@ -14,7 +14,9 @@ param(
     [string]$RepairProfile = 'Normal',
     [ValidateSet('Quick','Normal','Deep')]
     [string]$DiagnoseProfile = 'Normal',
-    [switch]$UiVerbose
+    [switch]$UiVerbose,
+    [string]$RecoverySourcePath,
+    [switch]$DeepRecoveryAllowNoSafeguard
 )
 
 Set-StrictMode -Version Latest
@@ -47,6 +49,6 @@ $meta | Tee-Object -FilePath $TranscriptPath -Append | Out-Null
 Write-Host "[START] $Mode | profile: diag=$DiagnoseProfile repair=$RepairProfile"
 Write-Host "[REPORT] $ReportPath"
 
-$exitCode = Invoke-WindowsFix -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile -UiVerbose:$UiVerbose
+$exitCode = Invoke-WindowsFix -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile -UiVerbose:$UiVerbose -RecoverySourcePath $RecoverySourcePath -DeepRecoveryAllowNoSafeguard:$DeepRecoveryAllowNoSafeguard
 "ExitCode=$exitCode" | Tee-Object -FilePath $TranscriptPath -Append | Out-Null
 exit $exitCode

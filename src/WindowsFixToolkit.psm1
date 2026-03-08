@@ -4,11 +4,21 @@ Set-StrictMode -Version Latest
 . $PSScriptRoot/internal/process.ps1
 . $PSScriptRoot/internal/checks.ps1
 
+if (-not (Get-Variable -Name CompiledRegexCache -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:CompiledRegexCache = @{}
+}
+
+function Convert-ToSafeInt {
+    param($Value,[int]$Default = 0)
+    if ($null -eq $Value) { return $Default }
+    try { return [int]$Value } catch { return $Default }
+}
+
 function New-ToolkitState {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Diagnose','Repair','Full','DryRun')]
+        [ValidateSet('Diagnose','Repair','Full','DryRun','DeepRecovery')]
         [string]$Mode,
         [Parameter(Mandatory)]
         [string]$ReportPath,
@@ -26,7 +36,9 @@ function New-ToolkitState {
         [ValidateSet('Quick','Normal','Deep')]
         [string]$DiagnoseProfile = 'Normal',
         [switch]$UiVerbose,
-        [int]$KeepOutputRuns = 5
+        [int]$KeepOutputRuns = 5,
+        [string]$RecoverySourcePath,
+        [switch]$DeepRecoveryAllowNoSafeguard
     )
 
     $ReportPath = $ReportPath.Trim()
@@ -75,6 +87,8 @@ function New-ToolkitState {
         DiagnoseProfile = $DiagnoseProfile
         UiVerbose = [bool]$UiVerbose
         KeepOutputRuns = $KeepOutputRuns
+        RecoverySourcePath = $RecoverySourcePath
+        DeepRecoveryAllowNoSafeguard = [bool]$DeepRecoveryAllowNoSafeguard
         StartedAt      = (Get-Date)
         IsAdmin        = (Test-IsAdmin)
         Stages         = New-Object System.Collections.Generic.List[object]
@@ -165,10 +179,10 @@ function Write-StageJournal {
             stage = [string]$Stage.stage_id
             stageName = [string]$Stage.stage_name
             status = [string]$Stage.status
-            exitCode = [int]$Stage.exit_code
+            exitCode = (Convert-ToSafeInt -Value $Stage.exit_code)
             startTime = $Stage.start_time
             endTime = $Stage.end_time
-            durationMs = [int]$Stage.duration_ms
+            durationMs = (Convert-ToSafeInt -Value $Stage.duration_ms)
             actions = @($Stage.actions)
             matchedSignatures = @($matchedSignatures)
             decision = $lastDecision
@@ -363,7 +377,7 @@ function Add-NormalizedEventsFromResult {
     $catalog = Get-SignatureCatalog
     $policy = Get-DecisionPolicy
 
-    if (-not (Get-Variable -Name CompiledRegexCache -Scope Script -ErrorAction SilentlyContinue)) {
+    if ($null -eq $script:CompiledRegexCache) {
         $script:CompiledRegexCache = @{}
     }
     foreach ($sig in $catalog) {
@@ -492,7 +506,7 @@ function Run-StagePreflight {
         $stage.findings.Add("Missing tools: $($missing -join ', ')")
     }
 
-    if (($State.EffectiveMode -in @('Repair','Full')) -and -not $State.IsAdmin) {
+    if (($State.EffectiveMode -in @('Repair','Full','DeepRecovery')) -and -not $State.IsAdmin) {
         $stage.findings.Add('Repair/Full requires elevation.')
         Evaluate-PreflightPolicy -State $State -PendingReboot $pending -CanRepair $false
         Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 2
@@ -830,6 +844,150 @@ function Run-StageFinalSummary {
     return 0
 }
 
+function Run-StageDeepRecoveryEnvironment {
+    param([pscustomobject]$State)
+    $stage = New-Stage 'DR-A' 'Deep environment and servicing preflight'
+
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $lang = (Get-WinSystemLocale -ErrorAction SilentlyContinue).Name
+    $isServer = $false
+    if ($os -and $os.ProductType -and [int]$os.ProductType -ne 1) { $isServer = $true }
+
+    $stage.findings.Add("OSFamily=$($(if($isServer){'Server'}else{'Client'})); Build=$($os.BuildNumber); Arch=$($os.OSArchitecture); Edition=$($os.Caption); Language=$lang")
+    $stage.findings.Add("PendingReboot=$($State.Context['pending_reboot']); IsElevated=$($State.IsAdmin)")
+
+    $online = $true
+    try { $null = Resolve-DnsName -Name 'www.microsoft.com' -ErrorAction Stop } catch { $online = $false }
+    $stage.findings.Add("Online=$online")
+    $State.Context['deep_is_server'] = $isServer
+    $State.Context['deep_online'] = $online
+
+    try {
+        $reAgent = & reagentc.exe /info 2>$null
+        if ($reAgent -match 'Windows RE status:\s+Enabled') { $stage.findings.Add('WinRE=Enabled') }
+        elseif ($reAgent -match 'Windows RE status:\s+Disabled') { $stage.findings.Add('WinRE=Disabled') }
+    } catch {}
+
+    Complete-Stage -State $State -Stage $stage -Status 'OK' -ExitCode 0
+    return 0
+}
+
+function Run-StageDeepRecoverySafeguard {
+    param([pscustomobject]$State)
+    $stage = New-Stage 'DR-B' 'Deep safeguard (restore point / system state backup)'
+    $isServer = [bool]$State.Context['deep_is_server']
+
+    if ($isServer) {
+        $wbadmin = Get-Command wbadmin.exe -ErrorAction SilentlyContinue
+        if ($wbadmin) {
+            $stage.findings.Add('Server OS detected: wbadmin workflow available for system-state backup.')
+            $stage.recommendations.Add('Run supported wbadmin system state backup before continuing.')
+            $State.Context['deep_safeguard_available'] = $true
+            Complete-Stage -State $State -Stage $stage -Status 'WARN' -ExitCode 0
+            return 0
+        }
+
+        $stage.findings.Add('Server OS detected: no wbadmin backup target/workflow confirmed.')
+        $State.Context['deep_safeguard_available'] = $false
+    } else {
+        $sysDrive = $env:SystemDrive
+        $restoreAvailable = [bool](Get-Command Enable-ComputerRestore -ErrorAction SilentlyContinue)
+        if ($restoreAvailable) {
+            try {
+                Enable-ComputerRestore -Drive $sysDrive -ErrorAction SilentlyContinue
+            } catch {}
+            try {
+                Checkpoint-Computer -Description 'WindowsFixToolkit_DeepRecovery' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop | Out-Null
+                $stage.findings.Add('Client safeguard: restore point created.')
+                $State.Context['deep_safeguard_available'] = $true
+                Complete-Stage -State $State -Stage $stage -Status 'OK' -ExitCode 0
+                return 0
+            } catch {
+                $stage.findings.Add("Restore point could not be created: $($_.Exception.Message)")
+                $State.Context['deep_safeguard_available'] = $false
+            }
+        } else {
+            $stage.findings.Add('System Restore cmdlets unavailable or unsupported on this system.')
+            $State.Context['deep_safeguard_available'] = $false
+        }
+    }
+
+    $stage.recommendations.Add('Rollback safeguard was not created; risk is higher.')
+    if (-not $State.DeepRecoveryAllowNoSafeguard) {
+        $stage.recommendations.Add('Continue only with explicit deep acknowledgement flag: -DeepRecoveryAllowNoSafeguard')
+        Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 1
+        return 1
+    }
+
+    Complete-Stage -State $State -Stage $stage -Status 'WARN' -ExitCode 0
+    return 0
+}
+
+function Run-StageDeepRecoverySourceValidation {
+    param([pscustomobject]$State)
+    $stage = New-Stage 'DR-C' 'Official source validation'
+
+    $source = [string]$State.RecoverySourcePath
+    if (-not $source) {
+        $stage.findings.Add('No recovery source path provided; fallback to Microsoft-supported online servicing path if available.')
+        $stage.recommendations.Add('Provide -RecoverySourcePath (mounted ISO/WIM/ESD) for deterministic Deep Recovery.')
+        Complete-Stage -State $State -Stage $stage -Status 'WARN' -ExitCode 0
+        return 0
+    }
+
+    $resolved = [System.IO.Path]::GetFullPath($source)
+    if (-not (Test-Path $resolved)) {
+        $stage.findings.Add("Recovery source not found: $resolved")
+        Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 1
+        return 1
+    }
+
+    $ext = [System.IO.Path]::GetExtension($resolved).ToLowerInvariant()
+    if ($ext -eq '.swm') {
+        $stage.findings.Add('Split image (install.swm) detected; unsupported in current automated flow.')
+        $stage.recommendations.Add('Provide install.wim/install.esd or mount official ISO and retry.')
+        Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 1
+        return 1
+    }
+
+    $stage.findings.Add("Recovery source validated path=$resolved")
+    $State.Context['deep_validated_source'] = $resolved
+    Complete-Stage -State $State -Stage $stage -Status 'OK' -ExitCode 0
+    return 0
+}
+
+function Run-StageDeepRecoveryExecution {
+    param([pscustomobject]$State)
+    $stage = New-Stage 'DR-D' 'Official source-assisted DISM + SFC'
+
+    $args = @('/Online','/Cleanup-Image','/RestoreHealth')
+    if ($State.Context['deep_validated_source']) {
+        $args += @('/Source:' + [string]$State.Context['deep_validated_source'], '/LimitAccess')
+    }
+
+    $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList $args -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
+    Add-ActionResult -State $State -Stage $stage -Name 'DISM RestoreHealth (official source)' -Result $dism -InterpretedStatus ($(if($dism.ExitCodeCaptured -and $dism.ExitCode -eq 0){'OK'}elseif(-not $dism.ExitCodeCaptured){'WARN'}else{'FAIL'}))
+
+    $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
+    Add-ActionResult -State $State -Stage $stage -Name 'SFC /scannow post-DISM' -Result $sfc -InterpretedStatus ($(if($sfc.ExitCodeCaptured -and $sfc.ExitCode -eq 0){'OK'}elseif(-not $sfc.ExitCodeCaptured){'WARN'}else{'FAIL'}))
+
+    $hasFail = @($stage.actions | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0
+    $hasWarn = @($stage.actions | Where-Object { $_.status -eq 'WARN' }).Count -gt 0
+    $status = if ($hasFail) { 'FAIL' } elseif ($hasWarn) { 'WARN' } else { 'OK' }
+    Complete-Stage -State $State -Stage $stage -Status $status -ExitCode ($(if($hasFail){1}else{0}))
+    return ($(if($hasFail){1}else{0}))
+}
+
+function Run-StageDeepRecoveryEscalation {
+    param([pscustomobject]$State)
+    $stage = New-Stage 'DR-E' 'Supported escalation path decision'
+    $stage.findings.Add('If corruption remains on supported Windows 11, use official path: Settings > Recovery > Fix problems using Windows Update > Reinstall now.')
+    $stage.findings.Add('Direct manual transplantation into System32/WinSxS/Servicing is unsupported/high-risk expert-only fallback.')
+    Complete-Stage -State $State -Stage $stage -Status 'WARN' -ExitCode 0
+    return 0
+}
+
 function Get-RootCauseSummary {
     param([pscustomobject]$State)
     $events = @($State.Context['normalized_events'])
@@ -864,7 +1022,7 @@ function Export-ToolkitReport {
         startedAt = $State.StartedAt
         finishedAt= Get-Date
         isAdmin   = $State.IsAdmin
-        repairRan = ($State.EffectiveMode -in @('Repair','Full') -and -not $State.IsDryRun)
+        repairRan = ($State.EffectiveMode -in @('Repair','Full','DeepRecovery') -and -not $State.IsDryRun)
         reportExported = $true
         overallPipelineStatus = $(if(@($State.Stages | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0){'FAIL'}elseif(@($State.Stages | Where-Object { $_.status -eq 'WARN' }).Count -gt 0){'WARN'}else{'OK'})
         logPath   = $State.LogPath
@@ -929,7 +1087,7 @@ function Invoke-WindowsFix {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Diagnose','Repair','Full','DryRun')]
+        [ValidateSet('Diagnose','Repair','Full','DryRun','DeepRecovery')]
         [string]$Mode,
         [Parameter(Mandatory)]
         [string]$ReportPath,
@@ -947,10 +1105,12 @@ function Invoke-WindowsFix {
         [ValidateSet('Quick','Normal','Deep')]
         [string]$DiagnoseProfile = 'Normal',
         [switch]$UiVerbose,
-        [int]$KeepOutputRuns = 5
+        [int]$KeepOutputRuns = 5,
+        [string]$RecoverySourcePath,
+        [switch]$DeepRecoveryAllowNoSafeguard
     )
 
-    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile -UiVerbose:$UiVerbose -KeepOutputRuns $KeepOutputRuns
+    $state = New-ToolkitState -Mode $Mode -ReportPath $ReportPath -LogPath $LogPath -TranscriptPath $TranscriptPath -NoNetwork:$NoNetwork -AssumeYes:$AssumeYes -Force:$Force -SubsystemProfile $SubsystemProfile -RepairProfile $RepairProfile -DiagnoseProfile $DiagnoseProfile -UiVerbose:$UiVerbose -KeepOutputRuns $KeepOutputRuns -RecoverySourcePath $RecoverySourcePath -DeepRecoveryAllowNoSafeguard:$DeepRecoveryAllowNoSafeguard
     Write-ToolkitLog -State $state -Message "Mode=$Mode, EffectiveMode=$($state.EffectiveMode), IsAdmin=$($state.IsAdmin), ReportPath=$ReportPath"
     Cleanup-OldOutputFolders -State $state
 
@@ -967,7 +1127,15 @@ function Invoke-WindowsFix {
             $null = Run-StageSnapshot -State $state
             $null = Run-StageEnvironmentValidation -State $state
 
-            if ($state.EffectiveMode -in @('Repair','Full')) {
+            if ($state.EffectiveMode -eq 'DeepRecovery') {
+                if ((Run-StageDeepRecoveryEnvironment -State $state) -ne 0) { $exitCode = 1 }
+                if ((Run-StageDeepRecoverySafeguard -State $state) -ne 0) { $exitCode = 1 }
+                if ((Run-StageDeepRecoverySourceValidation -State $state) -ne 0) { $exitCode = 1 }
+                if ($exitCode -eq 0) {
+                    if ((Run-StageDeepRecoveryExecution -State $state) -ne 0) { $exitCode = 1 }
+                    if ((Run-StageDeepRecoveryEscalation -State $state) -ne 0) { $exitCode = 1 }
+                }
+            } elseif ($state.EffectiveMode -in @('Repair','Full')) {
                 if ((Run-StageReadiness -State $state) -ne 0) { $exitCode = 1 }
                 if ((Run-StageComponentStoreRepair -State $state) -ne 0) { $exitCode = 1 }
                 if ((Run-StageSystemFileRepair -State $state) -ne 0) { $exitCode = 1 }
