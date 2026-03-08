@@ -869,11 +869,32 @@ function Run-StageDeepRecoveryEnvironment {
     $stage.findings.Add("OSFamily=$($(if($isServer){'Server'}else{'Client'})); Build=$($os.BuildNumber); Arch=$($os.OSArchitecture); Edition=$($os.Caption); Language=$lang")
     $stage.findings.Add("PendingReboot=$($State.Context['pending_reboot']); IsElevated=$($State.IsAdmin)")
 
+    $freeGb = 0.0
+    try {
+        $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
+        if ($drive) {
+            $freeGb = [math]::Round(($drive.FreeSpace / 1GB), 2)
+            $stage.findings.Add("SystemDriveFreeGB=$freeGb")
+            $State.Context['deep_system_drive_free_gb'] = $freeGb
+            if ($freeGb -lt 5) {
+                $stage.recommendations.Add('Critical low disk space on C:. Deep Recovery reliability is reduced.')
+            }
+        }
+    } catch {}
+
     $online = $true
     try { $null = Resolve-DnsName -Name 'www.microsoft.com' -ErrorAction Stop } catch { $online = $false }
     $stage.findings.Add("Online=$online")
     $State.Context['deep_is_server'] = $isServer
     $State.Context['deep_online'] = $online
+
+    $wuPathAvailable = $false
+    try {
+        $wuSvc = Get-Service -Name 'wuauserv' -ErrorAction SilentlyContinue
+        $wuPathAvailable = [bool]$wuSvc
+    } catch {}
+    $State.Context['deep_wu_path_available'] = $wuPathAvailable
+    $stage.findings.Add("WindowsUpdatePathAvailable=$wuPathAvailable")
 
     try {
         $reAgent = & reagentc.exe /info 2>$null
@@ -890,38 +911,127 @@ function Run-StageDeepRecoverySafeguard {
     $stage = New-Stage 'DR-B' 'Deep safeguard (restore point / system state backup)'
     $isServer = [bool]$State.Context['deep_is_server']
 
+    $State.Context['deep_safeguard_type'] = 'none'
+    $State.Context['deep_safeguard_status'] = 'unavailable'
+    $State.Context['deep_safeguard_reason'] = 'unknown'
+
+    function Test-SystemRestorePolicyDisabled {
+        try {
+            $paths = @(
+                'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\SystemRestore',
+                'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+            )
+            foreach ($p in $paths) {
+                if (-not (Test-Path $p)) { continue }
+                $v = Get-ItemProperty -Path $p -ErrorAction SilentlyContinue
+                if ($v -and (($v.DisableSR -eq 1) -or ($v.DisableConfig -eq 1))) { return $true }
+            }
+        } catch {}
+        return $false
+    }
+
+    function Test-IsManagedOrVDI {
+        try {
+            $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+            if ($cs -and $cs.PartOfDomain) { return $true }
+        } catch {}
+        try {
+            $model = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).Model
+            if ($model -match 'Virtual|VMware|KVM|Hyper-V|VDI|Citrix') { return $true }
+        } catch {}
+        return $false
+    }
+
+    function Test-VssEcosystemHealthy {
+        try {
+            $vss = Get-Service -Name 'VSS' -ErrorAction SilentlyContinue
+            $swprv = Get-Service -Name 'swprv' -ErrorAction SilentlyContinue
+            if (-not $vss -or -not $swprv) { return $false }
+            return $true
+        } catch { return $false }
+    }
+
     if ($isServer) {
         $wbadmin = Get-Command wbadmin.exe -ErrorAction SilentlyContinue
         if ($wbadmin) {
             $stage.findings.Add('Server OS detected: wbadmin workflow available for system-state backup.')
             $stage.recommendations.Add('Run supported wbadmin system state backup before continuing.')
             $State.Context['deep_safeguard_available'] = $true
+            $State.Context['deep_safeguard_type'] = 'systemStateBackup'
+            $State.Context['deep_safeguard_status'] = 'available'
+            $State.Context['deep_safeguard_reason'] = 'wbadmin_detected'
             Complete-Stage -State $State -Stage $stage -Status 'WARN' -ExitCode 0
             return 0
         }
 
         $stage.findings.Add('Server OS detected: no wbadmin backup target/workflow confirmed.')
         $State.Context['deep_safeguard_available'] = $false
+        $State.Context['deep_safeguard_type'] = 'systemStateBackup'
+        $State.Context['deep_safeguard_status'] = 'unavailable'
+        $State.Context['deep_safeguard_reason'] = 'no_wbadmin_or_target'
     } else {
         $sysDrive = $env:SystemDrive
         $restoreAvailable = [bool](Get-Command Enable-ComputerRestore -ErrorAction SilentlyContinue)
-        if ($restoreAvailable) {
+        $policyDisabled = Test-SystemRestorePolicyDisabled
+        $managedOrVdi = Test-IsManagedOrVDI
+        $vssHealthy = Test-VssEcosystemHealthy
+        $freeGb = 0.0
+        try { $freeGb = [double]$State.Context['deep_system_drive_free_gb'] } catch { $freeGb = 0.0 }
+
+        $State.Context['deep_safeguard_type'] = 'restorePoint'
+        $stage.findings.Add("RestorePolicyDisabled=$policyDisabled; ManagedOrVDI=$managedOrVdi; VSSHealthy=$vssHealthy")
+
+        if ($policyDisabled) {
+            $stage.findings.Add('System Restore is disabled by policy. Toolkit will not override policy settings.')
+            $State.Context['deep_safeguard_available'] = $false
+            $State.Context['deep_safeguard_status'] = 'policy_disabled'
+            $State.Context['deep_safeguard_reason'] = 'policy_disabled'
+        } elseif ($managedOrVdi) {
+            $stage.findings.Add('Managed/VDI-like environment detected. Automatic System Restore enablement is skipped by design.')
+            $State.Context['deep_safeguard_available'] = $false
+            $State.Context['deep_safeguard_status'] = 'managed_or_vdi'
+            $State.Context['deep_safeguard_reason'] = 'managed_or_vdi'
+        } elseif ($freeGb -gt 0 -and $freeGb -lt 5) {
+            $stage.findings.Add('Insufficient free disk space for safe restore-point provisioning.')
+            $State.Context['deep_safeguard_available'] = $false
+            $State.Context['deep_safeguard_status'] = 'insufficient_disk_space'
+            $State.Context['deep_safeguard_reason'] = 'insufficient_disk_space'
+        } elseif (-not $vssHealthy) {
+            $stage.findings.Add('VSS ecosystem appears unhealthy (VSS/swprv service dependency issue).')
+            $State.Context['deep_safeguard_available'] = $false
+            $State.Context['deep_safeguard_status'] = 'vss_dependency_problem'
+            $State.Context['deep_safeguard_reason'] = 'vss_dependency_problem'
+        } elseif ($restoreAvailable) {
             try {
                 Enable-ComputerRestore -Drive $sysDrive -ErrorAction SilentlyContinue
             } catch {}
+
+            # Conservative storage configuration: only system drive, minimal footprint.
+            try {
+                $quotaMb = 4096
+                & vssadmin resize shadowstorage /for=$sysDrive /on=$sysDrive /maxsize=${quotaMb}MB 1>$null 2>$null
+                $stage.findings.Add("Applied conservative shadow storage target on $sysDrive (~${quotaMb}MB).")
+            } catch {}
+
             try {
                 Checkpoint-Computer -Description 'WindowsFixToolkit_DeepRecovery' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop | Out-Null
                 $stage.findings.Add('Client safeguard: restore point created.')
                 $State.Context['deep_safeguard_available'] = $true
+                $State.Context['deep_safeguard_status'] = 'created'
+                $State.Context['deep_safeguard_reason'] = 'restore_point_created'
                 Complete-Stage -State $State -Stage $stage -Status 'OK' -ExitCode 0
                 return 0
             } catch {
                 $stage.findings.Add("Restore point could not be created: $($_.Exception.Message)")
                 $State.Context['deep_safeguard_available'] = $false
+                $State.Context['deep_safeguard_status'] = 'failed_to_create'
+                $State.Context['deep_safeguard_reason'] = 'restore_point_create_failed'
             }
         } else {
             $stage.findings.Add('System Restore cmdlets unavailable or unsupported on this system.')
             $State.Context['deep_safeguard_available'] = $false
+            $State.Context['deep_safeguard_status'] = 'unsupported'
+            $State.Context['deep_safeguard_reason'] = 'cmdlets_unavailable'
         }
     }
 
@@ -942,6 +1052,7 @@ function Run-StageDeepRecoverySourceValidation {
 
     $source = [string]$State.RecoverySourcePath
     if (-not $source) {
+        $State.Context['deep_source_valid'] = $false
         $stage.findings.Add('No recovery source path provided; fallback to Microsoft-supported online servicing path if available.')
         $stage.recommendations.Add('Provide -RecoverySourcePath (mounted ISO/WIM/ESD) for deterministic Deep Recovery.')
         Complete-Stage -State $State -Stage $stage -Status 'WARN' -ExitCode 0
@@ -950,6 +1061,7 @@ function Run-StageDeepRecoverySourceValidation {
 
     $resolved = [System.IO.Path]::GetFullPath($source)
     if (-not (Test-Path $resolved)) {
+        $State.Context['deep_source_valid'] = $false
         $stage.findings.Add("Recovery source not found: $resolved")
         Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 1
         return 1
@@ -957,6 +1069,7 @@ function Run-StageDeepRecoverySourceValidation {
 
     $ext = [System.IO.Path]::GetExtension($resolved).ToLowerInvariant()
     if ($ext -eq '.swm') {
+        $State.Context['deep_source_valid'] = $false
         $stage.findings.Add('Split image (install.swm) detected; unsupported in current automated flow.')
         $stage.recommendations.Add('Provide install.wim/install.esd or mount official ISO and retry.')
         Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 1
@@ -965,6 +1078,7 @@ function Run-StageDeepRecoverySourceValidation {
 
     $stage.findings.Add("Recovery source validated path=$resolved")
     $State.Context['deep_validated_source'] = $resolved
+    $State.Context['deep_source_valid'] = $true
     Complete-Stage -State $State -Stage $stage -Status 'OK' -ExitCode 0
     return 0
 }
@@ -1044,6 +1158,15 @@ function Export-ToolkitReport {
         normalizedEvents = @($State.Context['normalized_events'])
         policyDecisions = @($State.Context['policy_decisions'])
         rootCauseSummary = Get-RootCauseSummary -State $State
+        safeguard = [pscustomobject]@{
+            available = [bool]$State.Context['deep_safeguard_available']
+            type = [string]$State.Context['deep_safeguard_type']
+            status = [string]$State.Context['deep_safeguard_status']
+            reason = [string]$State.Context['deep_safeguard_reason']
+        }
+        sourceValidationPassed = [bool]$State.Context['deep_source_valid']
+        safeToReboot = -not [bool]$State.Context['pending_reboot']
+        finalConfidence = (Get-RootCauseSummary -State $State).confidence
     }
 
     $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $jsonPath -Encoding UTF8
@@ -1082,6 +1205,10 @@ function Export-ToolkitReport {
     $lines += "- System state: $($payload.rootCauseSummary.systemState)"
     $lines += "- Confidence: $($payload.rootCauseSummary.confidence)"
     $lines += "- Recommended fix: $($payload.rootCauseSummary.recommendedFix)"
+    $lines += "- Safeguard: available=$($payload.safeguard.available), type=$($payload.safeguard.type), status=$($payload.safeguard.status), reason=$($payload.safeguard.reason)"
+    $lines += "- Source validation passed: $($payload.sourceValidationPassed)"
+    $lines += "- Safe to reboot: $($payload.safeToReboot)"
+    $lines += "- Final confidence: $($payload.finalConfidence)"
 
     if ($payload.policyDecisions.Count -gt 0) {
         $lines += ''

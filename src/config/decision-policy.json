@@ -40,5 +40,26 @@
     "action": "fallback_or_abort",
     "retry_allowed": false,
     "requires_winre": true
+  },
+  "RESTORE_POLICY_DISABLED": {
+    "severity": "warning",
+    "category": "environment",
+    "action": "require_strong_ack_or_abort",
+    "retry_allowed": false,
+    "policy_managed": true
+  },
+  "VSS_DEPENDENCY_PROBLEM": {
+    "severity": "warning",
+    "category": "environment",
+    "action": "continue_with_strong_ack",
+    "retry_allowed": false,
+    "requires_vss_repair": true
+  },
+  "SERVER_NO_SYSTEMSTATE_TARGET": {
+    "severity": "warning",
+    "category": "environment",
+    "action": "continue_with_strong_ack",
+    "retry_allowed": false,
+    "requires_backup_target": true
   }
 }

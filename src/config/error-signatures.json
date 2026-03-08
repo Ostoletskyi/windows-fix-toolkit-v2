@@ -70,5 +70,32 @@
     "category": "environment",
     "hint": "Repair likely requires offline/WinRE path.",
     "next_action": "boot_to_winre_and_retry"
+  },
+  {
+    "signature": "RESTORE_POLICY_DISABLED",
+    "regex": "System Restore is disabled by policy",
+    "tool": "powershell",
+    "severity": "warning",
+    "category": "environment",
+    "hint": "System Restore is disabled by policy and should not be force-enabled automatically.",
+    "next_action": "require_explicit_no_safeguard_ack"
+  },
+  {
+    "signature": "VSS_DEPENDENCY_PROBLEM",
+    "regex": "VSS ecosystem appears unhealthy|VSS\/swprv service dependency issue",
+    "tool": "powershell",
+    "severity": "warning",
+    "category": "environment",
+    "hint": "VSS provider/services are unhealthy; rollback safeguard cannot be created reliably.",
+    "next_action": "repair_vss_or_continue_with_strong_ack"
+  },
+  {
+    "signature": "SERVER_NO_SYSTEMSTATE_TARGET",
+    "regex": "no wbadmin backup target\/workflow confirmed",
+    "tool": "powershell",
+    "severity": "warning",
+    "category": "environment",
+    "hint": "Server rollback artifact is unavailable because no valid wbadmin target/workflow was detected.",
+    "next_action": "configure_backup_target_or_continue_with_strong_ack"
   }
 ]
