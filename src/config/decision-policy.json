@@ -1,0 +1,30 @@
+{
+  "DISM_SOURCE_MISSING": {
+    "severity": "error",
+    "category": "system",
+    "action": "fallback_or_abort",
+    "retry_allowed": false,
+    "requires_source": true
+  },
+  "POWERSHELL_ARGUMENTLIST_NULL": {
+    "severity": "fatal",
+    "category": "internal",
+    "action": "abort_pipeline",
+    "retry_allowed": false,
+    "requires_code_fix": true
+  },
+  "EXIT_CODE_NOT_CAPTURED": {
+    "severity": "warning",
+    "category": "internal",
+    "action": "retry",
+    "retry_allowed": true,
+    "requires_code_fix": true
+  },
+  "ACCESS_DENIED": {
+    "severity": "error",
+    "category": "permissions",
+    "action": "relaunch_elevated_or_unlock",
+    "retry_allowed": true,
+    "requires_code_fix": false
+  }
+}
