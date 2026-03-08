@@ -34,10 +34,23 @@ function Convert-ToArray {
     param($Value)
     if ($null -eq $Value) { return @() }
     if ($Value -is [System.Array]) { return @($Value) }
-    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
-        return @($Value)
+
+    try {
+        if ($Value -is [string]) { return @($Value) }
+
+        if ($Value -is [System.Collections.IEnumerable]) {
+            $out = New-Object System.Collections.Generic.List[object]
+            foreach ($item in $Value) {
+                [void]$out.Add($item)
+            }
+            return @($out.ToArray())
+        }
+
+        return (, $Value)
+    } catch {
+        # Fallback for odd runtime/binder cases in Windows PowerShell.
+        return (, $Value)
     }
-    return @($Value)
 }
 
 function New-ToolkitState {
@@ -614,6 +627,10 @@ function Run-StageEnvironmentValidation {
     if ($State.DiagnoseProfile -eq 'Quick') {
         $stage.actions.Add([pscustomobject]@{ name='DISM CheckHealth baseline'; status='SKIPPED'; reason='DiagnoseProfile=Quick'; exit_code=0; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /CheckHealth'; stdout=''; stderr='' })
         $stage.findings.Add('Quick diagnose profile skips DISM CheckHealth baseline for speed.')
+    } elseif (-not $State.IsAdmin -and $State.EffectiveMode -eq 'Diagnose') {
+        $stage.actions.Add([pscustomobject]@{ name='DISM CheckHealth baseline'; status='SKIPPED'; reason='Diagnose mode without elevation'; exit_code=740; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /CheckHealth'; stdout=''; stderr='Elevation required (740)' })
+        $stage.findings.Add('Diagnose mode is running without elevation; DISM baseline is skipped to avoid 740 noise.')
+        $stage.recommendations.Add('Rerun Diagnose elevated if servicing baseline checks are required.')
     } else {
         $dismCheck = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
         $dismStatus = if (-not $dismCheck.ExitCodeCaptured) { 'WARN' } elseif ($dismCheck.ExitCode -eq 0) { 'OK' } else { 'WARN' }
