@@ -3,6 +3,22 @@ Set-StrictMode -Version Latest
 . $PSScriptRoot/internal/logging.ps1
 . $PSScriptRoot/internal/process.ps1
 . $PSScriptRoot/internal/checks.ps1
+. $PSScriptRoot/deeprecovery/schemas.ps1
+. $PSScriptRoot/deeprecovery/preflight.ps1
+. $PSScriptRoot/deeprecovery/safeguard.ps1
+. $PSScriptRoot/deeprecovery/sourceDiscovery.ps1
+. $PSScriptRoot/deeprecovery/sourceValidation.ps1
+. $PSScriptRoot/deeprecovery/dismRepair.ps1
+. $PSScriptRoot/deeprecovery/sfcRepair.ps1
+. $PSScriptRoot/deeprecovery/postcheck.ps1
+. $PSScriptRoot/deeprecovery/escalation.ps1
+. $PSScriptRoot/deeprecovery/reinstallPath.ps1
+. $PSScriptRoot/deeprecovery/classification.ps1
+. $PSScriptRoot/deeprecovery/reporting.ps1
+. $PSScriptRoot/deeprecovery/ui.ps1
+. $PSScriptRoot/deeprecovery/signatures.ps1
+. $PSScriptRoot/deeprecovery/policy.ps1
+. $PSScriptRoot/deeprecovery/orchestrator.ps1
 
 if (-not (Get-Variable -Name CompiledRegexCache -Scope Script -ErrorAction SilentlyContinue)) {
     $script:CompiledRegexCache = @{}
@@ -1267,13 +1283,7 @@ function Invoke-WindowsFix {
             $null = Run-StageEnvironmentValidation -State $state
 
             if ($state.EffectiveMode -eq 'DeepRecovery') {
-                if ((Run-StageDeepRecoveryEnvironment -State $state) -ne 0) { $exitCode = 1 }
-                if ((Run-StageDeepRecoverySafeguard -State $state) -ne 0) { $exitCode = 1 }
-                if ((Run-StageDeepRecoverySourceValidation -State $state) -ne 0) { $exitCode = 1 }
-                if ($exitCode -eq 0) {
-                    if ((Run-StageDeepRecoveryExecution -State $state) -ne 0) { $exitCode = 1 }
-                    if ((Run-StageDeepRecoveryEscalation -State $state) -ne 0) { $exitCode = 1 }
-                }
+                if ((Invoke-DeepRecoveryScaffold -State $state) -ne 0) { $exitCode = 1 }
             } elseif ($state.EffectiveMode -in @('Repair','Full')) {
                 if ((Run-StageReadiness -State $state) -ne 0) { $exitCode = 1 }
                 if ((Run-StageComponentStoreRepair -State $state) -ne 0) { $exitCode = 1 }

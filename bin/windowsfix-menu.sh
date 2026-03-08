@@ -211,11 +211,18 @@ print_stage_plan() {
   echo "  C) Environment validation"
 
   if [[ "$mode" == "DeepRecovery" ]]; then
-    echo "  DR-A) Deep environment and servicing preflight"
-    echo "  DR-B) Deep safeguard (restore point / wbadmin)"
-    echo "  DR-C) Official source validation"
-    echo "  DR-D) Source-assisted DISM + SFC"
-    echo "  DR-E) Supported escalation path decision"
+    echo "  DR-S0) Deep Recovery scaffold orchestration"
+    echo "    - PREFLIGHT"
+    echo "    - SAFEGUARD_CHECK"
+    echo "    - SAFEGUARD_ATTEMPT"
+    echo "    - SOURCE_DISCOVERY"
+    echo "    - SOURCE_VALIDATION"
+    echo "    - REPAIR_STAGE_DISM"
+    echo "    - REPAIR_STAGE_SFC"
+    echo "    - POSTCHECK"
+    echo "    - ESCALATION_DECISION"
+    echo "    - REINSTALL_PATH"
+    echo "    - FINAL_REPORT"
   elif [[ "$effective" == "Diagnose" ]]; then
     echo "  D) Permission / servicing readiness (SKIPPED in Diagnose)"
     echo "  E) Component store repair (SKIPPED in Diagnose)"
@@ -257,6 +264,7 @@ print_mode_banner() {
     DeepRecovery)
       echo "[INFO] Running Deep Recovery (Official Microsoft Source)."
       echo "[INFO] This mode is conservative, auditable, and requires explicit confirmations."
+      echo "[INFO] Step 1 scaffold only: repair/safeguard/source actions are stubs in this step."
       ;;
   esac
 }
