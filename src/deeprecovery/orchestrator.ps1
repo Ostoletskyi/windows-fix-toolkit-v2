@@ -33,18 +33,18 @@ function Invoke-DeepRecoveryScaffold {
     $escalationPhase = Invoke-DeepRecoveryEscalationDecisionPhase -State $State
     $reinstallPhase = Invoke-DeepRecoveryReinstallPathPhase -State $State
 
-    $phaseResults = @(
-        $preflightPhase,
-        $checkPhase,
-        $attemptPhase,
-        $sourceDiscoveryPhase,
-        $sourceValidationPhase,
-        $dismPhase,
-        $sfcPhase,
-        $postcheckPhase,
-        $escalationPhase,
-        $reinstallPhase
-    )
+    # Use explicit append flow to stay parser-safe across Windows PowerShell versions.
+    $phaseResults = @()
+    $phaseResults += $preflightPhase
+    $phaseResults += $checkPhase
+    $phaseResults += $attemptPhase
+    $phaseResults += $sourceDiscoveryPhase
+    $phaseResults += $sourceValidationPhase
+    $phaseResults += $dismPhase
+    $phaseResults += $sfcPhase
+    $phaseResults += $postcheckPhase
+    $phaseResults += $escalationPhase
+    $phaseResults += $reinstallPhase
 
     foreach ($pr in $phaseResults) {
         $report.phases += $pr
