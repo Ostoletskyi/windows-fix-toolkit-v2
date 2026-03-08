@@ -264,7 +264,7 @@ print_mode_banner() {
     DeepRecovery)
       echo "[INFO] Running Deep Recovery (Official Microsoft Source)."
       echo "[INFO] This mode is conservative, auditable, and requires explicit confirmations."
-      echo "[INFO] Step 2: preflight + safeguard implemented; source/repair/reinstall phases remain stubs."
+      echo "[INFO] Step 3: source discovery/validation + DISM/SFC/postcheck implemented; escalation/reinstall remain stubs."
       ;;
   esac
 }

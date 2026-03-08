@@ -1,71 +1,69 @@
-# Deep Recovery (Official Microsoft Source) — Step 2
+# Deep Recovery (Official Microsoft Source) — Step 3
 
-## Scope implemented in Step 2
-- Implemented `PREFLIGHT`.
-- Implemented `SAFEGUARD_CHECK`.
-- Implemented `SAFEGUARD_ATTEMPT`.
-- Populated related schema/report fields.
-- Kept later phases (`SOURCE_*`, `REPAIR_*`, `REINSTALL_PATH`) as stubs.
+## Scope implemented in Step 3
+Implemented:
+- `SOURCE_DISCOVERY`
+- `SOURCE_VALIDATION`
+- `REPAIR_STAGE_DISM`
+- `REPAIR_STAGE_SFC`
+- `POSTCHECK`
 
-## Phase behavior
-### PREFLIGHT
-Collects and classifies:
-- elevation
-- OS family (Client/Server), edition, architecture, build/version, UI language
-- pending reboot
-- internet connectivity
-- free disk space
-- WinRE status (best effort)
-- laptop/AC power state (best effort)
+Still stubbed by design:
+- `ESCALATION_DECISION`
+- `REINSTALL_PATH`
 
-Classification:
-- `ok`
-- `warning`
-- `blocking`
+## SOURCE_DISCOVERY
+Conservative pluggable discovery model:
+- user-provided path (`-RecoverySourcePath`)
+- known local paths (`C:\sources\install.wim/esd`, `C:\Windows\Sources\install.wim/esd`)
+- mounted media probes (`<drive>\sources\install.wim/esd/swm`)
+- explicit placeholder hook for future official download provider (not implemented)
 
-### SAFEGUARD_CHECK
-Client:
-- checks System Restore cmdlet availability
-- checks already-enabled state on system drive (best effort)
-- checks policy-disabled state (best effort)
+## SOURCE_VALIDATION
+Best-effort validation against running OS context:
+- architecture
+- edition/name hint
+- version/build compatibility (major/minor)
+- language hint where present
+- source type handling (`wim`, `esd`, `swm`, other)
 
-Server:
-- checks `wbadmin` availability
-- checks backup target readiness heuristic (best effort)
+Validation classes:
+- `valid`
+- `partial match`
+- `mismatch`
+- `unsupported`
+- `corrupted/unusable`
 
-Classifications:
-- `safeguard already available`
-- `safeguard unavailable but continuable`
-- `safeguard blocked by policy`
-- `safeguard unsupported`
+## REPAIR_STAGE_DISM
+- Executes conservative `DISM /Online /Cleanup-Image /RestoreHealth`.
+- Uses ` /Source:<path> /LimitAccess` when a validated local source exists.
+- Normalizes outcomes into categories:
+  - toolkit internal execution failure
+  - source problem
+  - servicing/component store problem
+  - environment/permissions problem
+  - success / partial success / failed / inconclusive
 
-### SAFEGUARD_ATTEMPT
-Client:
-- conservative attempt on system drive only
-- enables restore protection if feasible
-- sets conservative shadowstorage target
-- attempts restore point creation
+## REPAIR_STAGE_SFC
+- Executes `sfc /scannow` after DISM where appropriate.
+- Uses same normalized classification model.
 
-Server:
-- readiness-only in this step (no forced backup execution)
+## POSTCHECK
+- Executes:
+  - `DISM /Online /Cleanup-Image /CheckHealth`
+  - `sfc /verifyonly`
+- Parses baseline signals and classifies:
+  - `resolved`
+  - `remains`
+  - `inconclusive`
+- Records reboot recommendation (pending reboot marker based).
 
-Classifications:
-- `safeguard successfully created`
-- `safeguard failed`
-- or passthrough from safeguard check
+## Reporting updates
+Deep Recovery step report now includes:
+- source validation status
+- DISM/SFC outcomes and classifications
+- postcheck classification and reboot recommendation
+- strong-ack requirement state
 
-If safeguard cannot be guaranteed, result is explicitly logged and `requiresStrongAck=true` is set for later phases.
-
-## Schemas populated
-- `preflightResult`
-- `safeguardCheckResult`
-- `safeguardResult`
-- `stageResult`
-- `finalReport` (+ `requiresStrongAck`)
-
-## Step 3 integration note
-Step 3 should consume:
-- `requiresStrongAck`
-- `preflightResult`
-- `safeguardResult`
-and only then implement `SOURCE_DISCOVERY` + `SOURCE_VALIDATION` + repair execution policy gates.
+## Step 4 integration note
+Step 4 should consume Step 3 outputs (`sourceValidationResult`, `dismResult`, `sfcResult`, `postcheckResult`) to drive supported escalation/reinstall policy decisions only.

@@ -1243,6 +1243,10 @@ function Export-ToolkitReport {
         $lines += "- SafeguardCheckClassification: $($payload.deepRecovery.safeguardCheckResult.classification)"
         $lines += "- SafeguardResultClassification: $($payload.deepRecovery.safeguardResult.classification)"
         $lines += "- RequiresStrongAck: $($payload.deepRecovery.requiresStrongAck)"
+        $lines += "- SourceValidation: $($payload.deepRecovery.sourceValidationResult.validation)"
+        $lines += "- DISM: outcome=$($payload.deepRecovery.dismResult.outcome), class=$($payload.deepRecovery.dismResult.classification)"
+        $lines += "- SFC: outcome=$($payload.deepRecovery.sfcResult.outcome), class=$($payload.deepRecovery.sfcResult.classification)"
+        $lines += "- Postcheck: $($payload.deepRecovery.postcheckResult.classification), rebootRecommended=$($payload.deepRecovery.postcheckResult.rebootRecommended)"
     }
 
     Set-Content -Path $mdPath -Value $lines -Encoding UTF8

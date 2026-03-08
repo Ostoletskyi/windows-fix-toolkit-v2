@@ -17,7 +17,7 @@ Windows Fix Toolkit: **утилиты выполняются на PowerShell 5.1
 - `Diagnose`
 - `Repair` (по стадиям readiness -> DISM -> SFC -> subsystem -> postcheck)
 - `Full` (Diagnose + Repair + Post-check)
-- `DeepRecovery` (Official Microsoft Source, double confirmation; Step 2 implements preflight+safeguard)
+- `DeepRecovery` (Official Microsoft Source, double confirmation; Step 3 implements source validation + DISM/SFC/postcheck)
 - `DryRun` (PLANNED-план без изменений)
 
 ## Быстрый старт

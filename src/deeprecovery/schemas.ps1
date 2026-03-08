@@ -42,14 +42,52 @@ function New-DeepRecoverySafeguardResultTemplate {
     }
 }
 
+function New-DeepRecoverySourceDiscoveryResultTemplate {
+    [pscustomobject]@{
+        selected = $null
+        candidates = @()
+        downloadHook = [pscustomobject]@{ supported=$false; reason='not_set' }
+    }
+}
+
 function New-DeepRecoverySourceValidationResultTemplate {
     [pscustomobject]@{
         sourceProvided = $false
+        path = ''
         sourceType = 'unknown'
         isValid = $false
         matchConfidence = 'unknown'
-        reason = 'scaffold'
+        validation = 'unknown'
+        reason = 'not_evaluated'
+        osContext = $null
+        imageInfo = $null
         details = @()
+    }
+}
+
+function New-DeepRecoveryRepairResultTemplate {
+    [pscustomobject]@{
+        tool = 'unknown'
+        command = ''
+        exitCode = $null
+        exitCodeCaptured = $false
+        stdoutPath = $null
+        stderrPath = $null
+        usedValidatedLocalSource = $false
+        classification = 'unknown'
+        outcome = 'inconclusive'
+        reason = 'not_run'
+    }
+}
+
+function New-DeepRecoveryPostcheckResultTemplate {
+    [pscustomobject]@{
+        dismCheck = $null
+        sfcVerify = $null
+        signals = @()
+        classification = 'inconclusive'
+        outcome = 'inconclusive'
+        rebootRecommended = $false
     }
 }
 
@@ -77,15 +115,19 @@ function New-DeepRecoveryStageResultTemplate {
 function New-DeepRecoveryFinalReportTemplate {
     [pscustomobject]@{
         feature = 'Deep Recovery (Official Microsoft Source)'
-        step = 2
+        step = 3
         phases = @()
         preflightResult = New-DeepRecoveryPreflightResultTemplate
         safeguardCheckResult = New-DeepRecoverySafeguardResultTemplate
         safeguardResult = New-DeepRecoverySafeguardResultTemplate
+        sourceDiscoveryResult = New-DeepRecoverySourceDiscoveryResultTemplate
         sourceValidationResult = New-DeepRecoverySourceValidationResultTemplate
+        dismResult = New-DeepRecoveryRepairResultTemplate
+        sfcResult = New-DeepRecoveryRepairResultTemplate
+        postcheckResult = New-DeepRecoveryPostcheckResultTemplate
         overallStatus = 'PLANNED'
         requiresStrongAck = $false
-        confidence = 'low'
-        nextStep = 'Step 3: source discovery/validation and repair execution'
+        confidence = 'medium'
+        nextStep = 'Step 4: escalation and reinstall-path policy implementation'
     }
 }
