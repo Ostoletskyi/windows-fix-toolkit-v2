@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "step": 1,
+  "description": "Deep Recovery signature placeholders for phased implementation",
+  "signatures": [
+    {
+      "signature": "DR_PLACEHOLDER",
+      "severity": "info",
+      "category": "scaffold",
+      "match": "TODO_STEP2"
+    }
+  ]
+}
