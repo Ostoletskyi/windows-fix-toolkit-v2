@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "step": 1,
+  "description": "Deep Recovery policy placeholders for phased implementation",
+  "policies": {
+    "DR_PLACEHOLDER": {
+      "action": "none",
+      "retry_allowed": false,
+      "notes": "Implement in Step 2+"
+    }
+  }
+}
