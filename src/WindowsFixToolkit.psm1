@@ -35,6 +35,11 @@ function New-ToolkitState {
         $resolvedLogPath = Join-Path $ReportPath 'toolkit.log'
     }
 
+    $ctx = @{
+        normalized_events = New-Object System.Collections.Generic.List[object]
+        policy_decisions = New-Object System.Collections.Generic.List[object]
+    }
+
     [pscustomobject]@{
         Mode           = $Mode
         IsDryRun       = ($Mode -eq 'DryRun')
@@ -53,7 +58,7 @@ function New-ToolkitState {
         IsAdmin        = (Test-IsAdmin)
         Stages         = New-Object System.Collections.Generic.List[object]
         Steps          = New-Object System.Collections.Generic.List[object]
-        Context        = @{}
+        Context        = $ctx
         ExitCode       = 0
     }
 }
@@ -87,6 +92,7 @@ function Complete-Stage {
 
 function Add-ActionResult {
     param(
+        [pscustomobject]$State,
         [pscustomobject]$Stage,
         [string]$Name,
         [pscustomobject]$Result,
@@ -107,6 +113,113 @@ function Add-ActionResult {
         stdout = $Result.StdOut
         stderr = $Result.StdErr
     })
+
+    Add-NormalizedEventsFromResult -State $State -StageId $Stage.stage_id -Result $Result
+}
+
+function Get-SignatureCatalog {
+    @(
+        [pscustomobject]@{ signature='DISM_SOURCE_MISSING'; regex='0x800f081f|source files could not be found'; tool='dism'; severity='error'; hint='DISM source is unavailable.'; next_action='retry_with_source_or_abort' },
+        [pscustomobject]@{ signature='ACCESS_DENIED'; regex='Access is denied|0x80070005'; tool='generic'; severity='error'; hint='Permission/elevation issue.'; next_action='relaunch_elevated_or_unlock' },
+        [pscustomobject]@{ signature='WRP_CORRUPTION_FOUND'; regex='Windows Resource Protection found corrupt files'; tool='sfc'; severity='warning'; hint='SFC found corruption.'; next_action='review_repairability_then_reboot' },
+        [pscustomobject]@{ signature='DISM_COMPONENT_REPAIRABLE'; regex='component store is repairable|repairable'; tool='dism'; severity='warning'; hint='Component store corruption is repairable.'; next_action='run_restorehealth' },
+        [pscustomobject]@{ signature='ARGUMENTLIST_NULL'; regex='ArgumentList.*null|cannot bind argument'; tool='powershell'; severity='fatal'; hint='Wrapper argument construction bug.'; next_action='abort_and_fix_tooling' },
+        [pscustomobject]@{ signature='EXIT_CODE_NOT_CAPTURED'; regex=''; tool='internal'; severity='warning'; hint='External process finished but exit code was not captured.'; next_action='mark_unverified_and_retry' }
+    )
+}
+
+function Add-NormalizedEvent {
+    param(
+        [pscustomobject]$State,
+        [string]$StageId,
+        [string]$Tool,
+        [string]$Severity,
+        [string]$Signature,
+        [string]$Raw,
+        [string]$Hint,
+        [string]$NextAction
+    )
+    if (-not $State) { return }
+    if (-not $State.Context['normalized_events']) {
+        $State.Context['normalized_events'] = New-Object System.Collections.Generic.List[object]
+    }
+    $State.Context['normalized_events'].Add([pscustomobject]@{
+        stage = $StageId
+        tool = $Tool
+        severity = $Severity
+        signature = $Signature
+        raw = $Raw
+        hint = $Hint
+        next_action = $NextAction
+    })
+}
+
+function Register-PolicyDecision {
+    param(
+        [pscustomobject]$State,
+        [string]$StageId,
+        [string]$Decision,
+        [string]$Reason,
+        [string]$Evidence
+    )
+    if (-not $State) { return }
+    if (-not $State.Context['policy_decisions']) {
+        $State.Context['policy_decisions'] = New-Object System.Collections.Generic.List[object]
+    }
+    $State.Context['policy_decisions'].Add([pscustomobject]@{
+        stage = $StageId
+        decision = $Decision
+        reason = $Reason
+        evidence = $Evidence
+    })
+}
+
+function Get-ToolNameFromCommand {
+    param([pscustomobject]$Result)
+    if (-not $Result -or -not $Result.FilePath) { return 'unknown' }
+    return ([System.IO.Path]::GetFileNameWithoutExtension($Result.FilePath).ToLowerInvariant())
+}
+
+function Add-NormalizedEventsFromResult {
+    param(
+        [pscustomobject]$State,
+        [string]$StageId,
+        [pscustomobject]$Result
+    )
+    if (-not $State -or -not $Result) { return }
+    $tool = Get-ToolNameFromCommand -Result $Result
+    $catalog = Get-SignatureCatalog
+
+    if (-not $Result.ExitCodeCaptured) {
+        $sig = $catalog | Where-Object { $_.signature -eq 'EXIT_CODE_NOT_CAPTURED' } | Select-Object -First 1
+        Add-NormalizedEvent -State $State -StageId $StageId -Tool $tool -Severity $sig.severity -Signature $sig.signature -Raw $Result.CommandLine -Hint $sig.hint -NextAction $sig.next_action
+        Register-PolicyDecision -State $State -StageId $StageId -Decision 'retry' -Reason 'Exit code not captured' -Evidence $Result.CommandLine
+    }
+
+    $lines = @()
+    if ($Result.StdOut) { $lines += ($Result.StdOut -split "`r?`n") }
+    if ($Result.StdErr) { $lines += ($Result.StdErr -split "`r?`n") }
+    foreach ($line in $lines) {
+        foreach ($sig in $catalog) {
+            if (-not $sig.regex) { continue }
+            if ($line -match $sig.regex) {
+                if ($sig.tool -ne 'generic' -and $sig.tool -ne $tool -and $sig.tool -ne 'powershell') { continue }
+                Add-NormalizedEvent -State $State -StageId $StageId -Tool $tool -Severity $sig.severity -Signature $sig.signature -Raw $line -Hint $sig.hint -NextAction $sig.next_action
+                $decision = if ($sig.severity -eq 'fatal') { 'abort' } elseif ($sig.signature -eq 'DISM_SOURCE_MISSING') { 'fallback' } elseif ($sig.signature -eq 'DISM_COMPONENT_REPAIRABLE') { 'continue' } else { 'suggest_manual_action' }
+                Register-PolicyDecision -State $State -StageId $StageId -Decision $decision -Reason $sig.signature -Evidence $line
+            }
+        }
+    }
+}
+
+function Evaluate-PreflightPolicy {
+    param([pscustomobject]$State,[bool]$PendingReboot,[bool]$CanRepair)
+    if ($PendingReboot) {
+        Register-PolicyDecision -State $State -StageId 'A' -Decision 'continue' -Reason 'Pending reboot present' -Evidence 'pending_reboot=true'
+    }
+    if (-not $CanRepair) {
+        Register-PolicyDecision -State $State -StageId 'A' -Decision 'abort' -Reason 'Repair preconditions failed' -Evidence 'preflight'
+    }
 }
 
 function Get-MissingTools {
@@ -141,10 +254,13 @@ function Run-StagePreflight {
     if ($os) { $stage.findings.Add("OS=$($os.Caption) Build=$($os.BuildNumber) Arch=$arch") }
     $stage.findings.Add("PowerShell=$($PSVersionTable.PSVersion.ToString())")
 
+    $pending = $false
+
     $isWritable = Test-ReportPathWritable -Path $State.ReportPath
     $State.Context['report_writable'] = $isWritable
     if (-not $isWritable) {
         $stage.findings.Add("ReportPath is not writable: $($State.ReportPath)")
+        Evaluate-PreflightPolicy -State $State -PendingReboot $pending -CanRepair $false
         Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 10
         return 10
     }
@@ -155,6 +271,7 @@ function Run-StagePreflight {
         $stage.findings.Add("SystemDriveFreeGB=$freeGb")
         if ($freeGb -lt 2) {
             $stage.recommendations.Add('Critical low disk space on C:; free space before repair.')
+            Evaluate-PreflightPolicy -State $State -PendingReboot $pending -CanRepair $false
             Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 1
             return 1
         } elseif ($freeGb -lt 8) {
@@ -185,11 +302,13 @@ function Run-StagePreflight {
 
     if (($State.EffectiveMode -in @('Repair','Full')) -and -not $State.IsAdmin) {
         $stage.findings.Add('Repair/Full requires elevation.')
+        Evaluate-PreflightPolicy -State $State -PendingReboot $pending -CanRepair $false
         Complete-Stage -State $State -Stage $stage -Status 'FAIL' -ExitCode 2
         return 2
     }
 
     $status = if ($pending -or $missing.Count -gt 0) { 'WARN' } else { 'OK' }
+    Evaluate-PreflightPolicy -State $State -PendingReboot $pending -CanRepair $true
     Complete-Stage -State $State -Stage $stage -Status $status -ExitCode 0
     return 0
 }
@@ -264,7 +383,7 @@ function Run-StageEnvironmentValidation {
     } else {
         $dismCheck = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
         $dismStatus = if (-not $dismCheck.ExitCodeCaptured) { 'WARN' } elseif ($dismCheck.ExitCode -eq 0) { 'OK' } else { 'WARN' }
-        Add-ActionResult -Stage $stage -Name 'DISM CheckHealth baseline' -Result $dismCheck -InterpretedStatus $dismStatus
+        Add-ActionResult -State $State -Stage $stage -Name 'DISM CheckHealth baseline' -Result $dismCheck -InterpretedStatus $dismStatus
         $stage.findings.Add("DISM CheckHealth baseline exit=$($dismCheck.ExitCode)")
         if (-not $dismCheck.ExitCodeCaptured) {
             $stage.recommendations.Add('DISM baseline finished but exit code was not captured reliably.')
@@ -354,7 +473,7 @@ function Run-StageComponentStoreRepair {
     }
 
     $check = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
-    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth' -Result $check -InterpretedStatus ($(if(-not $check.ExitCodeCaptured){'WARN'}elseif($check.ExitCode -eq 0){'OK'}else{'WARN'}))
+    Add-ActionResult -State $State -Stage $stage -Name 'DISM CheckHealth' -Result $check -InterpretedStatus ($(if(-not $check.ExitCodeCaptured){'WARN'}elseif($check.ExitCode -eq 0){'OK'}else{'WARN'}))
     if (-not $check.ExitCodeCaptured) { $stage.recommendations.Add('DISM CheckHealth exit code was not captured; result verification is limited.') }
 
     if ($State.RepairProfile -eq 'Quick') {
@@ -363,7 +482,7 @@ function Run-StageComponentStoreRepair {
         $stage.recommendations.Add('Quick profile skips ScanHealth/RestoreHealth for faster run. Use RepairProfile=Normal or Deep for full servicing repair.')
     } else {
         $scan = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/ScanHealth') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode
-        Add-ActionResult -Stage $stage -Name 'DISM ScanHealth' -Result $scan -InterpretedStatus ($(if(-not $scan.ExitCodeCaptured){'WARN'}elseif($scan.ExitCode -eq 0){'OK'}else{'FAIL'}))
+        Add-ActionResult -State $State -Stage $stage -Name 'DISM ScanHealth' -Result $scan -InterpretedStatus ($(if(-not $scan.ExitCodeCaptured){'WARN'}elseif($scan.ExitCode -eq 0){'OK'}else{'FAIL'}))
 
         $needRestore = $true
         if ($scan.ExitCode -eq 0 -and $scan.StdOut -match 'No component store corruption detected' -and $State.RepairProfile -eq 'Normal') {
@@ -373,12 +492,12 @@ function Run-StageComponentStoreRepair {
 
         if ($needRestore) {
             $restore = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
-            Add-ActionResult -Stage $stage -Name 'DISM RestoreHealth' -Result $restore -InterpretedStatus ($(if(-not $restore.ExitCodeCaptured){'WARN'}elseif($restore.ExitCode -eq 0){'OK'}else{'FAIL'}))
+            Add-ActionResult -State $State -Stage $stage -Name 'DISM RestoreHealth' -Result $restore -InterpretedStatus ($(if(-not $restore.ExitCodeCaptured){'WARN'}elseif($restore.ExitCode -eq 0){'OK'}else{'FAIL'}))
         }
     }
 
     $verify = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
-    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth verify' -Result $verify -InterpretedStatus ($(if(-not $verify.ExitCodeCaptured){'WARN'}elseif($verify.ExitCode -eq 0){'OK'}else{'WARN'}))
+    Add-ActionResult -State $State -Stage $stage -Name 'DISM CheckHealth verify' -Result $verify -InterpretedStatus ($(if(-not $verify.ExitCodeCaptured){'WARN'}elseif($verify.ExitCode -eq 0){'OK'}else{'WARN'}))
 
     $hasFail = @($stage.actions | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0
     $hasUnverified = @($stage.actions | Where-Object { $_.exit_code_captured -eq $false }).Count -gt 0
@@ -420,7 +539,7 @@ function Run-StageSystemFileRepair {
     elseif ($sfc.ExitCode -eq 0) { $normalized = 'OK'; $stage.findings.Add('SFC completed with exit code 0 (native console mode).') }
     else { $normalized = 'FAIL' }
 
-    Add-ActionResult -Stage $stage -Name 'SFC /scannow' -Result $sfc -InterpretedStatus $normalized
+    Add-ActionResult -State $State -Stage $stage -Name 'SFC /scannow' -Result $sfc -InterpretedStatus $normalized
     if ($normalized -eq 'OK') { Write-Host '[OK] SFC completed successfully' }
     elseif ($normalized -eq 'WARN') { Write-Host '[WARN] SFC completed but requires attention' -ForegroundColor Yellow }
     else { Write-Host '[FAIL] SFC failed' -ForegroundColor Red }
@@ -460,7 +579,7 @@ function Run-StageSubsystemRepairs {
                 return 0
             }
             $winsock = Invoke-ExternalCommand -FilePath 'netsh.exe' -ArgumentList @('winsock','reset') -TimeoutSec 120 -HeartbeatSec 10 -State $State -IgnoreExitCode
-            Add-ActionResult -Stage $stage -Name 'netsh winsock reset' -Result $winsock -InterpretedStatus ($(if($winsock.ExitCode -eq 0){'OK'}else{'WARN'}))
+            Add-ActionResult -State $State -Stage $stage -Name 'netsh winsock reset' -Result $winsock -InterpretedStatus ($(if($winsock.ExitCode -eq 0){'OK'}else{'WARN'}))
             $stage.recommendations.Add('Reboot required after winsock reset.')
             Complete-Stage -State $State -Stage $stage -Status ($(if($winsock.ExitCode -eq 0){'WARN'}else{'FAIL'})) -ExitCode ($(if($winsock.ExitCode -eq 0){0}else{1}))
             return ($(if($winsock.ExitCode -eq 0){0}else{1}))
@@ -478,7 +597,7 @@ function Run-StagePostValidation {
     $stage = New-Stage 'H' 'Post-repair validation'
 
     $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
-    Add-ActionResult -Stage $stage -Name 'DISM CheckHealth post' -Result $dism -InterpretedStatus ($(if(-not $dism.ExitCodeCaptured){'WARN'}elseif($dism.ExitCode -eq 0){'OK'}else{'WARN'}))
+    Add-ActionResult -State $State -Stage $stage -Name 'DISM CheckHealth post' -Result $dism -InterpretedStatus ($(if(-not $dism.ExitCodeCaptured){'WARN'}elseif($dism.ExitCode -eq 0){'OK'}else{'WARN'}))
 
     $critical = 'TrustedInstaller','wuauserv','bits','cryptsvc' | ForEach-Object {
         $svc = Get-Service -Name $_ -ErrorAction SilentlyContinue
@@ -530,6 +649,8 @@ function Export-ToolkitReport {
         transcriptPath = $State.TranscriptPath
         stages    = $State.Stages
         steps     = $State.Steps
+        normalizedEvents = @($State.Context['normalized_events'])
+        policyDecisions = @($State.Context['policy_decisions'])
     }
 
     $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $jsonPath -Encoding UTF8
@@ -551,6 +672,22 @@ function Export-ToolkitReport {
         foreach ($f in $st.findings) { $lines += "  - $f" }
         foreach ($r in $st.recommendations) { $lines += "  - Recommendation: $r" }
         foreach ($a in $st.artifacts) { $lines += "  - Artifact: $a" }
+    }
+
+    if ($payload.normalizedEvents.Count -gt 0) {
+        $lines += ''
+        $lines += '## Normalized events (sample)'
+        foreach ($ev in ($payload.normalizedEvents | Select-Object -First 20)) {
+            $lines += "- [$($ev.stage)] $($ev.tool) $($ev.severity) $($ev.signature): $($ev.hint)"
+        }
+    }
+
+    if ($payload.policyDecisions.Count -gt 0) {
+        $lines += ''
+        $lines += '## Policy decisions (sample)'
+        foreach ($pd in ($payload.policyDecisions | Select-Object -First 20)) {
+            $lines += "- [$($pd.stage)] $($pd.decision): $($pd.reason)"
+        }
     }
 
     Set-Content -Path $mdPath -Value $lines -Encoding UTF8
