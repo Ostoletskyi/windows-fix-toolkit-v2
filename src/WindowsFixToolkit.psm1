@@ -193,10 +193,12 @@ function Write-StageJournal {
         $journalDir = Join-Path $State.ReportPath 'journal'
         New-Item -ItemType Directory -Path $journalDir -Force | Out-Null
 
-        $eventsPool = Convert-ToArray -Value $State.Context['normalized_events']
-        $decisionPool = Convert-ToArray -Value $State.Context['policy_decisions']
+        $eventsPool = @(Convert-ToArray -Value $State.Context['normalized_events'])
+        $decisionPool = @(Convert-ToArray -Value $State.Context['policy_decisions'])
         $events = @($eventsPool | Where-Object { $_ -and $_.stage -eq $Stage.stage_id })
         $decisions = @($decisionPool | Where-Object { $_ -and $_.stage -eq $Stage.stage_id })
+        $actionsArr = @(Convert-ToArray -Value $Stage.actions)
+        $findingsArr = @(Convert-ToArray -Value $Stage.findings)
 
         $matchedSignatures = @()
         foreach ($ev in $events) {
@@ -224,10 +226,10 @@ function Write-StageJournal {
             startTime = $Stage.start_time
             endTime = $Stage.end_time
             durationMs = (Convert-ToSafeInt -Value $Stage.duration_ms)
-            actions = (Convert-ToArray -Value $Stage.actions)
+            actions = $actionsArr
             matchedSignatures = @($matchedSignatures)
             decision = $lastDecision
-            humanSummary = if ((Convert-ToArray -Value $Stage.findings).Count -gt 0) { [string](Convert-ToArray -Value $Stage.findings)[0] } else { "Stage $($Stage.stage_id) completed with status $($Stage.status)" }
+            humanSummary = if ($findingsArr.Count -gt 0) { [string]$findingsArr[0] } else { "Stage $($Stage.stage_id) completed with status $($Stage.status)" }
             normalizedEvents = @($events)
             policyDecisions = @($decisions)
         }
@@ -855,6 +857,14 @@ function Run-StageSubsystemRepairs {
 function Run-StagePostValidation {
     param([pscustomobject]$State)
     $stage = New-Stage 'H' 'Post-repair validation'
+
+    if (-not $State.IsAdmin -and $State.EffectiveMode -eq 'Diagnose') {
+        $stage.actions.Add([pscustomobject]@{ name='DISM CheckHealth post'; status='SKIPPED'; reason='Diagnose mode without elevation'; exit_code=740; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /CheckHealth'; stdout=''; stderr='Elevation required (740)' })
+        $stage.findings.Add('Diagnose mode without elevation: post-repair DISM check skipped to avoid 740 noise.')
+        $stage.recommendations.Add('Run elevated Diagnose/Repair to include servicing post-validation checks.')
+        Complete-Stage -State $State -Stage $stage -Status 'WARN' -ExitCode 0
+        return 0
+    }
 
     $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
     Add-ActionResult -State $State -Stage $stage -Name 'DISM CheckHealth post' -Result $dism -InterpretedStatus ($(if(-not $dism.ExitCodeCaptured){'WARN'}elseif($dism.ExitCode -eq 0){'OK'}else{'WARN'}))
