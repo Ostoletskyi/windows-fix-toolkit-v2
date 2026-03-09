@@ -53,6 +53,35 @@ function Convert-ToArray {
     }
 }
 
+
+function Get-StateContextValue {
+    param(
+        [pscustomobject]$State,
+        [Parameter(Mandatory)][string]$Key,
+        $Default = $null
+    )
+
+    if (-not $State -or -not $State.PSObject -or -not ($State.PSObject.Properties.Name -contains 'Context')) {
+        return $Default
+    }
+
+    $ctx = $State.Context
+    if ($null -eq $ctx) { return $Default }
+
+    try {
+        if ($ctx -is [hashtable]) {
+            if ($ctx.ContainsKey($Key)) { return $ctx[$Key] }
+            return $Default
+        }
+
+        if ($ctx.PSObject -and ($ctx.PSObject.Properties.Name -contains $Key)) {
+            return $ctx.$Key
+        }
+    } catch {}
+
+    return $Default
+}
+
 function New-ToolkitState {
     [CmdletBinding()]
     param(
@@ -1175,7 +1204,7 @@ function Run-StageDeepRecoveryEscalation {
 
 function Get-RootCauseSummary {
     param([pscustomobject]$State)
-    $events = @($State.Context['normalized_events'])
+    $events = @(Convert-ToArray -Value (Get-StateContextValue -State $State -Key 'normalized_events' -Default @()))
     if ($events.Count -eq 0) {
         return [pscustomobject]@{ rootCause='No strong signature matched'; affectedStage='unknown'; systemState='unknown'; confidence='low'; recommendedFix='Review toolkit.log and report.md' }
     }
@@ -1202,8 +1231,8 @@ function Export-ToolkitReport {
     $mdPath = Join-Path $State.ReportPath 'report.md'
 
     $stagesArr = @(Convert-ToArray -Value $State.Stages)
-    $normalizedEvents = @(Convert-ToArray -Value $State.Context['normalized_events'])
-    $policyDecisions = @(Convert-ToArray -Value $State.Context['policy_decisions'])
+    $normalizedEvents = @(Convert-ToArray -Value (Get-StateContextValue -State $State -Key 'normalized_events' -Default @()))
+    $policyDecisions = @(Convert-ToArray -Value (Get-StateContextValue -State $State -Key 'policy_decisions' -Default @()))
     $rootCause = Get-RootCauseSummary -State $State
 
     $failedCount = 0
@@ -1219,7 +1248,7 @@ function Export-ToolkitReport {
     $overallPipelineStatus = if ($failedCount -gt 0) { 'FAIL' } elseif ($warnCount -gt 0) { 'WARN' } else { 'OK' }
 
     $deepRecovery = $null
-    $deepContext = $State.Context['deepRecovery']
+    $deepContext = Get-StateContextValue -State $State -Key 'deepRecovery' -Default $null
     if ($deepContext) {
         if ($deepContext -is [hashtable]) {
             if ($deepContext.ContainsKey('scaffoldReport')) { $deepRecovery = $deepContext['scaffoldReport'] }
@@ -1245,13 +1274,13 @@ function Export-ToolkitReport {
         policyDecisions = $policyDecisions
         rootCauseSummary = $rootCause
         safeguard = [pscustomobject]@{
-            available = [bool]$State.Context['deep_safeguard_available']
-            type = [string]$State.Context['deep_safeguard_type']
-            status = [string]$State.Context['deep_safeguard_status']
-            reason = [string]$State.Context['deep_safeguard_reason']
+            available = [bool](Get-StateContextValue -State $State -Key 'deep_safeguard_available' -Default $false)
+            type = [string](Get-StateContextValue -State $State -Key 'deep_safeguard_type' -Default '')
+            status = [string](Get-StateContextValue -State $State -Key 'deep_safeguard_status' -Default '')
+            reason = [string](Get-StateContextValue -State $State -Key 'deep_safeguard_reason' -Default '')
         }
-        sourceValidationPassed = [bool]$State.Context['deep_source_valid']
-        safeToReboot = -not [bool]$State.Context['pending_reboot']
+        sourceValidationPassed = [bool](Get-StateContextValue -State $State -Key 'deep_source_valid' -Default $false)
+        safeToReboot = -not [bool](Get-StateContextValue -State $State -Key 'pending_reboot' -Default $false)
         finalConfidence = [string]$rootCause.confidence
         deepRecovery = $deepRecovery
     }
