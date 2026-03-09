@@ -1201,6 +1201,33 @@ function Export-ToolkitReport {
     $jsonPath = Join-Path $State.ReportPath 'report.json'
     $mdPath = Join-Path $State.ReportPath 'report.md'
 
+    $stagesArr = @(Convert-ToArray -Value $State.Stages)
+    $normalizedEvents = @(Convert-ToArray -Value $State.Context['normalized_events'])
+    $policyDecisions = @(Convert-ToArray -Value $State.Context['policy_decisions'])
+    $rootCause = Get-RootCauseSummary -State $State
+
+    $failedCount = 0
+    $warnCount = 0
+    foreach ($st in $stagesArr) {
+        $status = ''
+        if ($st -and $st.PSObject -and ($st.PSObject.Properties.Name -contains 'status')) {
+            $status = [string]$st.status
+        }
+        if ($status -eq 'FAIL') { $failedCount++ }
+        elseif ($status -eq 'WARN') { $warnCount++ }
+    }
+    $overallPipelineStatus = if ($failedCount -gt 0) { 'FAIL' } elseif ($warnCount -gt 0) { 'WARN' } else { 'OK' }
+
+    $deepRecovery = $null
+    $deepContext = $State.Context['deepRecovery']
+    if ($deepContext) {
+        if ($deepContext -is [hashtable]) {
+            if ($deepContext.ContainsKey('scaffoldReport')) { $deepRecovery = $deepContext['scaffoldReport'] }
+        } elseif ($deepContext.PSObject -and ($deepContext.PSObject.Properties.Name -contains 'scaffoldReport')) {
+            $deepRecovery = $deepContext.scaffoldReport
+        }
+    }
+
     $payload = [pscustomobject]@{
         mode      = $State.Mode
         effectiveMode = $State.EffectiveMode
@@ -1209,14 +1236,14 @@ function Export-ToolkitReport {
         isAdmin   = $State.IsAdmin
         repairRan = ($State.EffectiveMode -in @('Repair','Full','DeepRecovery') -and -not $State.IsDryRun)
         reportExported = $true
-        overallPipelineStatus = $(if(@($State.Stages | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0){'FAIL'}elseif(@($State.Stages | Where-Object { $_.status -eq 'WARN' }).Count -gt 0){'WARN'}else{'OK'})
+        overallPipelineStatus = $overallPipelineStatus
         logPath   = $State.LogPath
         transcriptPath = $State.TranscriptPath
-        stages    = $State.Stages
-        steps     = $State.Steps
-        normalizedEvents = @($State.Context['normalized_events'])
-        policyDecisions = @($State.Context['policy_decisions'])
-        rootCauseSummary = Get-RootCauseSummary -State $State
+        stages    = $stagesArr
+        steps     = @(Convert-ToArray -Value $State.Steps)
+        normalizedEvents = $normalizedEvents
+        policyDecisions = $policyDecisions
+        rootCauseSummary = $rootCause
         safeguard = [pscustomobject]@{
             available = [bool]$State.Context['deep_safeguard_available']
             type = [string]$State.Context['deep_safeguard_type']
@@ -1225,8 +1252,8 @@ function Export-ToolkitReport {
         }
         sourceValidationPassed = [bool]$State.Context['deep_source_valid']
         safeToReboot = -not [bool]$State.Context['pending_reboot']
-        finalConfidence = (Get-RootCauseSummary -State $State).confidence
-        deepRecovery = if ($State.Context['deepRecovery'] -and $State.Context['deepRecovery']['scaffoldReport']) { $State.Context['deepRecovery']['scaffoldReport'] } else { $null }
+        finalConfidence = [string]$rootCause.confidence
+        deepRecovery = $deepRecovery
     }
 
     $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $jsonPath -Encoding UTF8
