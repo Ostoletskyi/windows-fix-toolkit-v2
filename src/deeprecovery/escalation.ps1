@@ -8,6 +8,12 @@ function Resolve-DeepRecoveryScenario {
     $post = $State.Context['deepRecovery']['postcheckResult']
     $pre = $State.Context['deepRecovery']['preflightResult']
 
+    $normEvents = @()
+    try { $normEvents = @($State.Context['normalized_events']) } catch { $normEvents = @() }
+    if (@($normEvents | Where-Object { $_ -and $_.signature -eq 'EXIT_CODE_NOT_CAPTURED' }).Count -gt 0) {
+        return 'toolkit_internal_failure'
+    }
+
     if ($dism -and $dism.classification -eq 'toolkit_internal_execution_failure') { return 'toolkit_internal_failure' }
     if ($source -and $source.validation -eq 'mismatch') { return 'source_mismatch' }
     if ($source -and $source.reason -match 'offline') { return 'offline_required' }

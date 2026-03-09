@@ -680,7 +680,7 @@ function Run-StageEnvironmentValidation {
         $stage.findings.Add('Diagnose mode is running without elevation; DISM baseline is skipped to avoid 740 noise.')
         $stage.recommendations.Add('Rerun Diagnose elevated if servicing baseline checks are required.')
     } else {
-        $dismCheck = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
+        $dismCheck = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
         $dismStatus = if (-not $dismCheck.ExitCodeCaptured) { 'WARN' } elseif ($dismCheck.ExitCode -eq 0) { 'OK' } else { 'WARN' }
         Add-ActionResult -State $State -Stage $stage -Name 'DISM CheckHealth baseline' -Result $dismCheck -InterpretedStatus $dismStatus
         $stage.findings.Add("DISM CheckHealth baseline exit=$($dismCheck.ExitCode)")
@@ -693,9 +693,12 @@ function Run-StageEnvironmentValidation {
         }
     }
 
-    $diskErr = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7,51,55,153} -MaxEvents 30 -ErrorAction SilentlyContinue
-    if ($diskErr) {
-        $stage.findings.Add('Disk error indicators found in System log.')
+    $diskErrRaw = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7,51,55,153} -MaxEvents 60 -ErrorAction SilentlyContinue
+    $diskErr = @($diskErrRaw | Where-Object {
+        $_ -and $_.ProviderName -match 'disk|storahci|stornvme|Ntfs|volsnap|iaStor|partmgr'
+    })
+    if ($diskErr.Count -gt 0) {
+        $stage.findings.Add('Disk error indicators found in System log (storage providers).')
         $details = $diskErr | Select-Object TimeCreated, Id, ProviderName, LevelDisplayName, Message
         $diskPath = Join-Path $State.ReportPath 'disk-indicators.json'
         $details | ConvertTo-Json -Depth 6 | Set-Content -Path $diskPath -Encoding UTF8
@@ -705,9 +708,11 @@ function Run-StageEnvironmentValidation {
             $stage.findings.Add("DiskEvent id=$($d.Id) provider=$($d.ProviderName)")
         }
         $stage.recommendations.Add('Run CHKDSK before deep component/system repair.')
+    } elseif (@($diskErrRaw).Count -gt 0) {
+        $stage.findings.Add('System log contains non-storage event IDs in the disk indicator set; storage-critical signals were not confirmed.')
     }
 
-    $status = if (($dismCheck -and $dismCheck.ExitCode -ne 0) -or $diskErr) { 'WARN' } else { 'OK' }
+    $status = if (($dismCheck -and $dismCheck.ExitCode -ne 0) -or ($diskErr.Count -gt 0)) { 'WARN' } else { 'OK' }
     Complete-Stage -State $State -Stage $stage -Status $status -ExitCode 0
     return 0
 }
@@ -780,7 +785,7 @@ function Run-StageComponentStoreRepair {
         return 1
     }
 
-    $check = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
+    $check = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
     Add-ActionResult -State $State -Stage $stage -Name 'DISM CheckHealth' -Result $check -InterpretedStatus ($(if(-not $check.ExitCodeCaptured){'WARN'}elseif($check.ExitCode -eq 0){'OK'}else{'WARN'}))
     if (-not $check.ExitCodeCaptured) { $stage.recommendations.Add('DISM CheckHealth exit code was not captured; result verification is limited.') }
 
@@ -789,7 +794,7 @@ function Run-StageComponentStoreRepair {
         $stage.actions.Add([pscustomobject]@{ name='DISM RestoreHealth'; status='SKIPPED'; reason='RepairProfile=Quick'; exit_code=0; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /RestoreHealth'; stdout=''; stderr='' })
         $stage.recommendations.Add('Quick profile skips ScanHealth/RestoreHealth for faster run. Use RepairProfile=Normal or Deep for full servicing repair.')
     } else {
-        $scan = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/ScanHealth') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode
+        $scan = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/ScanHealth') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
         Add-ActionResult -State $State -Stage $stage -Name 'DISM ScanHealth' -Result $scan -InterpretedStatus ($(if(-not $scan.ExitCodeCaptured){'WARN'}elseif($scan.ExitCode -eq 0){'OK'}else{'FAIL'}))
 
         $needRestore = $true
@@ -799,12 +804,12 @@ function Run-StageComponentStoreRepair {
         }
 
         if ($needRestore) {
-            $restore = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
+            $restore = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
             Add-ActionResult -State $State -Stage $stage -Name 'DISM RestoreHealth' -Result $restore -InterpretedStatus ($(if(-not $restore.ExitCodeCaptured){'WARN'}elseif($restore.ExitCode -eq 0){'OK'}else{'FAIL'}))
         }
     }
 
-    $verify = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
+    $verify = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
     Add-ActionResult -State $State -Stage $stage -Name 'DISM CheckHealth verify' -Result $verify -InterpretedStatus ($(if(-not $verify.ExitCodeCaptured){'WARN'}elseif($verify.ExitCode -eq 0){'OK'}else{'WARN'}))
 
     $hasFail = @($stage.actions | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0
@@ -837,7 +842,7 @@ function Run-StageSystemFileRepair {
     }
 
     Write-Host '[WORK] Running SFC scan in a separate console window...'
-    $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
+    $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
     $normalized = 'WARN'
     if (-not $sfc.ExitCodeCaptured) { $normalized = 'WARN'; $stage.recommendations.Add('SFC exit code was not captured reliably; verify via CBS.log and rerun if needed.') }
     elseif ($sfc.StdOut -match 'did not find any integrity violations') { $normalized = 'OK' }
@@ -912,7 +917,7 @@ function Run-StagePostValidation {
         return 0
     }
 
-    $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
+    $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
     Add-ActionResult -State $State -Stage $stage -Name 'DISM CheckHealth post' -Result $dism -InterpretedStatus ($(if(-not $dism.ExitCodeCaptured){'WARN'}elseif($dism.ExitCode -eq 0){'OK'}else{'WARN'}))
 
     $critical = 'TrustedInstaller','wuauserv','bits','cryptsvc' | ForEach-Object {
@@ -1181,10 +1186,10 @@ function Run-StageDeepRecoveryExecution {
         $args += @('/Source:' + [string]$State.Context['deep_validated_source'], '/LimitAccess')
     }
 
-    $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList $args -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
+    $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList $args -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
     Add-ActionResult -State $State -Stage $stage -Name 'DISM RestoreHealth (official source)' -Result $dism -InterpretedStatus ($(if($dism.ExitCodeCaptured -and $dism.ExitCode -eq 0){'OK'}elseif(-not $dism.ExitCodeCaptured){'WARN'}else{'FAIL'}))
 
-    $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
+    $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
     Add-ActionResult -State $State -Stage $stage -Name 'SFC /scannow post-DISM' -Result $sfc -InterpretedStatus ($(if($sfc.ExitCodeCaptured -and $sfc.ExitCode -eq 0){'OK'}elseif(-not $sfc.ExitCodeCaptured){'WARN'}else{'FAIL'}))
 
     $hasFail = @($stage.actions | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0

@@ -25,7 +25,7 @@ function Invoke-DeepRecoveryDismPhase {
     }
 
     try {
-        $cmd = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList $args -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
+        $cmd = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList $args -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
         $class = Get-DeepRecoveryExecutionClassification -Result $cmd -Tool 'dism'
 
         $result.command = $cmd.CommandLine

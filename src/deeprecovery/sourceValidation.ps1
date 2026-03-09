@@ -16,7 +16,7 @@ function Parse-DismWimInfo {
 
     $info = [pscustomobject]@{ raw=''; index=''; name=''; architecture=''; version=''; language=''; usable=$false }
     try {
-        $res = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Get-WimInfo',('/WimFile:' + $WimPath),'/index:1') -TimeoutSec 900 -HeartbeatSec 15 -IgnoreExitCode
+        $res = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Get-WimInfo',('/WimFile:' + $WimPath),'/index:1') -TimeoutSec 900 -HeartbeatSec 15 -IgnoreExitCode -ForceCaptured
         $text = ($res.StdOut + "`n" + $res.StdErr)
         $info.raw = $text
         if ($text -match 'Name\s*:\s*(.+)') { $info.name = $Matches[1].Trim() }

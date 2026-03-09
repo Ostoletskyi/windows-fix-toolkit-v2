@@ -6,7 +6,7 @@ function Invoke-DeepRecoveryPostcheckPhase {
 
     $dismCheck = $null
     try {
-        $dismCheck = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode
+        $dismCheck = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/CheckHealth') -TimeoutSec 1800 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
         $result.dismCheck = [pscustomobject]@{
             exitCode = $dismCheck.ExitCode
             exitCodeCaptured = $dismCheck.ExitCodeCaptured
@@ -19,7 +19,7 @@ function Invoke-DeepRecoveryPostcheckPhase {
 
     $sfcVerify = $null
     try {
-        $sfcVerify = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/verifyonly') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode
+        $sfcVerify = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/verifyonly') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
         $result.sfcVerify = [pscustomobject]@{
             exitCode = $sfcVerify.ExitCode
             exitCodeCaptured = $sfcVerify.ExitCodeCaptured

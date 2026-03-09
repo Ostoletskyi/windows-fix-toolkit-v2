@@ -44,7 +44,8 @@ function Invoke-ExternalCommand {
         [int]$TimeoutSec = 600,
         [int]$HeartbeatSec = 15,
         [pscustomobject]$State,
-        [switch]$IgnoreExitCode
+        [switch]$IgnoreExitCode,
+        [switch]$ForceCaptured
     )
 
     if ($TimeoutSec -lt 1) { throw 'TimeoutSec must be >= 1 second.' }
@@ -59,6 +60,7 @@ function Invoke-ExternalCommand {
     $argsClean = @($ArgumentList | Where-Object { $_ -ne $null -and $_ -ne '' })
     $cmdline = ConvertTo-CommandLine -FilePath $FilePath -ArgumentList $argsClean
     if ($State) { Write-ToolkitLog -Message ">> $cmdline" -State $State }
+    if ($ForceCaptured -and $State) { Write-ToolkitLog -State $State -Message "[PROCESS] forcing captured mode for reliable exit-code capture" }
 
     $startTime = Get-Date
     if ($State) { Write-ToolkitLog -State $State -Message "[PROCESS] start=$($startTime.ToString('s')) cmd=$cmdline" }
@@ -80,7 +82,7 @@ function Invoke-ExternalCommand {
     $stderrPath = $null
     $processId = $null
 
-    if (Test-UseSeparateServiceWindow -FilePath $FilePath) {
+    if ((-not $ForceCaptured) -and (Test-UseSeparateServiceWindow -FilePath $FilePath)) {
         $launchMode = 'NativeConsole'
         if ($interactive) {
             Write-Host "[WORK] Launching service command in a separate console window: $displayCmd"
