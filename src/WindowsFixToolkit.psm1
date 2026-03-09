@@ -1202,24 +1202,139 @@ function Run-StageDeepRecoveryEscalation {
     return 0
 }
 
+function Normalize-ToArray {
+    param($Value)
+    if ($null -eq $Value) { return @() }
+    if ($Value -is [System.Array]) { return @($Value) }
+    return @($Value)
+}
+
+function Normalize-ToString {
+    param($Value)
+    if ($null -eq $Value) { return '' }
+    try { return [string]$Value } catch { return '' }
+}
+
+function Normalize-ToBool {
+    param($Value,[bool]$Default = $false)
+    if ($null -eq $Value) { return $Default }
+    try { return [bool]$Value } catch { return $Default }
+}
+
+function Get-ObjectValue {
+    param($Object,[string]$Name,$Default=$null)
+    if ($null -eq $Object) { return $Default }
+
+    try {
+        if ($Object -is [hashtable]) {
+            if ($Object.ContainsKey($Name)) { return $Object[$Name] }
+            return $Default
+        }
+
+        if ($Object.PSObject -and ($Object.PSObject.Properties.Name -contains $Name)) {
+            return $Object.$Name
+        }
+    } catch {}
+
+    return $Default
+}
+
+function Get-NestedObjectValue {
+    param($Object,[string[]]$Path,$Default=$null)
+    $current = $Object
+    foreach ($part in (Normalize-ToArray -Value $Path)) {
+        $current = Get-ObjectValue -Object $current -Name (Normalize-ToString -Value $part) -Default $null
+        if ($null -eq $current) { return $Default }
+    }
+    return $current
+}
+
+function Debug-StateTypes {
+    param([pscustomobject]$State)
+    if (-not $State -or -not $State.PSObject) { return }
+
+    foreach ($prop in $State.PSObject.Properties) {
+        $name = Normalize-ToString -Value $prop.Name
+        $value = $prop.Value
+        $typeName = if ($null -eq $value) { '<null>' } else { Normalize-ToString -Value $value.GetType().FullName }
+
+        if ($State -and (Get-ObjectValue -Object $State -Name 'LogPath' -Default $null)) {
+            Write-ToolkitLog -State $State -Message ("[TYPE-DEBUG] {0} : {1}" -f $name, $typeName)
+        } else {
+            Write-Host ("[TYPE-DEBUG] {0} : {1}" -f $name, $typeName)
+        }
+    }
+}
+
+function Normalize-StateForReport {
+    param([pscustomobject]$State)
+
+    $normalizedEvents = @(Normalize-ToArray -Value (Get-StateContextValue -State $State -Key 'normalized_events' -Default @()))
+    $policyDecisions = @(Normalize-ToArray -Value (Get-StateContextValue -State $State -Key 'policy_decisions' -Default @()))
+    $stagesArr = @(Normalize-ToArray -Value (Get-ObjectValue -Object $State -Name 'Stages' -Default @()))
+    $stepsArr = @(Normalize-ToArray -Value (Get-ObjectValue -Object $State -Name 'Steps' -Default @()))
+
+    $deepRecovery = $null
+    $deepContext = Get-StateContextValue -State $State -Key 'deepRecovery' -Default $null
+    if ($deepContext) {
+        $deepRecovery = Get-ObjectValue -Object $deepContext -Name 'scaffoldReport' -Default $null
+    }
+
+    return [pscustomobject]@{
+        Mode = Normalize-ToString -Value (Get-ObjectValue -Object $State -Name 'Mode' -Default '')
+        EffectiveMode = Normalize-ToString -Value (Get-ObjectValue -Object $State -Name 'EffectiveMode' -Default '')
+        StartedAt = Get-ObjectValue -Object $State -Name 'StartedAt' -Default $null
+        IsAdmin = Normalize-ToBool -Value (Get-ObjectValue -Object $State -Name 'IsAdmin' -Default $false)
+        IsDryRun = Normalize-ToBool -Value (Get-ObjectValue -Object $State -Name 'IsDryRun' -Default $false)
+        LogPath = Normalize-ToString -Value (Get-ObjectValue -Object $State -Name 'LogPath' -Default '')
+        TranscriptPath = Normalize-ToString -Value (Get-ObjectValue -Object $State -Name 'TranscriptPath' -Default '')
+        Stages = $stagesArr
+        Steps = $stepsArr
+        NormalizedEvents = $normalizedEvents
+        PolicyDecisions = $policyDecisions
+        PendingReboot = Normalize-ToBool -Value (Get-StateContextValue -State $State -Key 'pending_reboot' -Default $false)
+        SafeguardAvailable = Normalize-ToBool -Value (Get-StateContextValue -State $State -Key 'deep_safeguard_available' -Default $false)
+        SafeguardType = Normalize-ToString -Value (Get-StateContextValue -State $State -Key 'deep_safeguard_type' -Default '')
+        SafeguardStatus = Normalize-ToString -Value (Get-StateContextValue -State $State -Key 'deep_safeguard_status' -Default '')
+        SafeguardReason = Normalize-ToString -Value (Get-StateContextValue -State $State -Key 'deep_safeguard_reason' -Default '')
+        SourceValidationPassed = Normalize-ToBool -Value (Get-StateContextValue -State $State -Key 'deep_source_valid' -Default $false)
+        DeepRecovery = $deepRecovery
+    }
+}
+
 function Get-RootCauseSummary {
     param([pscustomobject]$State)
-    $events = @(Convert-ToArray -Value (Get-StateContextValue -State $State -Key 'normalized_events' -Default @()))
+
+    $events = @(Normalize-ToArray -Value (Get-StateContextValue -State $State -Key 'normalized_events' -Default @()))
     if ($events.Count -eq 0) {
         return [pscustomobject]@{ rootCause='No strong signature matched'; affectedStage='unknown'; systemState='unknown'; confidence='low'; recommendedFix='Review toolkit.log and report.md' }
     }
-    $chosen = $events | Where-Object { $_.category -eq 'internal' -and $_.severity -in @('fatal','error') } | Select-Object -First 1
-    if (-not $chosen) { $chosen = $events | Where-Object { $_.severity -in @('fatal','error') } | Select-Object -First 1 }
-    if (-not $chosen) { $chosen = $events | Select-Object -First 1 }
 
-    $sysState = if ($chosen.category -eq 'internal') { 'unknown, execution reliability impacted' } else { 'degraded' }
-    $confidence = if ($chosen.signature -eq 'EXIT_CODE_NOT_CAPTURED') { 'medium' } else { 'high' }
+    $chosen = $null
+    foreach ($ev in $events) {
+        $category = Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'category' -Default '')
+        $severity = Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'severity' -Default '')
+        if ($category -eq 'internal' -and ($severity -eq 'fatal' -or $severity -eq 'error')) { $chosen = $ev; break }
+    }
+    if (-not $chosen) {
+        foreach ($ev in $events) {
+            $severity = Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'severity' -Default '')
+            if ($severity -eq 'fatal' -or $severity -eq 'error') { $chosen = $ev; break }
+        }
+    }
+    if (-not $chosen) { $chosen = $events[0] }
+
+    $chosenCategory = Normalize-ToString -Value (Get-ObjectValue -Object $chosen -Name 'category' -Default '')
+    $chosenSignature = Normalize-ToString -Value (Get-ObjectValue -Object $chosen -Name 'signature' -Default 'unknown')
+    $sysState = if ($chosenCategory -eq 'internal') { 'unknown, execution reliability impacted' } else { 'degraded' }
+    $confidence = if ($chosenSignature -eq 'EXIT_CODE_NOT_CAPTURED') { 'medium' } else { 'high' }
+
     return [pscustomobject]@{
-        rootCause = $chosen.signature
-        affectedStage = $chosen.stage
+        rootCause = $chosenSignature
+        affectedStage = Normalize-ToString -Value (Get-ObjectValue -Object $chosen -Name 'stage' -Default 'unknown')
         systemState = $sysState
         confidence = $confidence
-        recommendedFix = $chosen.next_action
+        recommendedFix = Normalize-ToString -Value (Get-ObjectValue -Object $chosen -Name 'next_action' -Default 'Review toolkit.log and report.md')
     }
 }
 
@@ -1227,132 +1342,141 @@ function Export-ToolkitReport {
     [CmdletBinding()]
     param([Parameter(Mandatory)][pscustomobject]$State)
 
-    $jsonPath = Join-Path $State.ReportPath 'report.json'
-    $mdPath = Join-Path $State.ReportPath 'report.md'
+    $jsonPath = Join-Path (Normalize-ToString -Value (Get-ObjectValue -Object $State -Name 'ReportPath' -Default '.')) 'report.json'
+    $mdPath = Join-Path (Normalize-ToString -Value (Get-ObjectValue -Object $State -Name 'ReportPath' -Default '.')) 'report.md'
 
-    $stagesArr = @(Convert-ToArray -Value $State.Stages)
-    $normalizedEvents = @(Convert-ToArray -Value (Get-StateContextValue -State $State -Key 'normalized_events' -Default @()))
-    $policyDecisions = @(Convert-ToArray -Value (Get-StateContextValue -State $State -Key 'policy_decisions' -Default @()))
+    if (Normalize-ToBool -Value (Get-ObjectValue -Object $State -Name 'UiVerbose' -Default $false)) {
+        Debug-StateTypes -State $State
+    }
+
+    $safe = Normalize-StateForReport -State $State
     $rootCause = Get-RootCauseSummary -State $State
 
     $failedCount = 0
     $warnCount = 0
-    foreach ($st in $stagesArr) {
-        $status = ''
-        if ($st -and $st.PSObject -and ($st.PSObject.Properties.Name -contains 'status')) {
-            $status = [string]$st.status
-        }
+    foreach ($st in $safe.Stages) {
+        $status = Normalize-ToString -Value (Get-ObjectValue -Object $st -Name 'status' -Default '')
         if ($status -eq 'FAIL') { $failedCount++ }
         elseif ($status -eq 'WARN') { $warnCount++ }
     }
     $overallPipelineStatus = if ($failedCount -gt 0) { 'FAIL' } elseif ($warnCount -gt 0) { 'WARN' } else { 'OK' }
 
-    $deepRecovery = $null
-    $deepContext = Get-StateContextValue -State $State -Key 'deepRecovery' -Default $null
-    if ($deepContext) {
-        if ($deepContext -is [hashtable]) {
-            if ($deepContext.ContainsKey('scaffoldReport')) { $deepRecovery = $deepContext['scaffoldReport'] }
-        } elseif ($deepContext.PSObject -and ($deepContext.PSObject.Properties.Name -contains 'scaffoldReport')) {
-            $deepRecovery = $deepContext.scaffoldReport
-        }
-    }
-
     $payload = [pscustomobject]@{
-        mode      = $State.Mode
-        effectiveMode = $State.EffectiveMode
-        startedAt = $State.StartedAt
+        mode      = $safe.Mode
+        effectiveMode = $safe.EffectiveMode
+        startedAt = $safe.StartedAt
         finishedAt= Get-Date
-        isAdmin   = $State.IsAdmin
-        repairRan = ($State.EffectiveMode -in @('Repair','Full','DeepRecovery') -and -not $State.IsDryRun)
+        isAdmin   = $safe.IsAdmin
+        repairRan = ($safe.EffectiveMode -in @('Repair','Full','DeepRecovery') -and -not $safe.IsDryRun)
         reportExported = $true
         overallPipelineStatus = $overallPipelineStatus
-        logPath   = $State.LogPath
-        transcriptPath = $State.TranscriptPath
-        stages    = $stagesArr
-        steps     = @(Convert-ToArray -Value $State.Steps)
-        normalizedEvents = $normalizedEvents
-        policyDecisions = $policyDecisions
+        logPath   = $safe.LogPath
+        transcriptPath = $safe.TranscriptPath
+        stages    = $safe.Stages
+        steps     = $safe.Steps
+        normalizedEvents = $safe.NormalizedEvents
+        policyDecisions = $safe.PolicyDecisions
         rootCauseSummary = $rootCause
         safeguard = [pscustomobject]@{
-            available = [bool](Get-StateContextValue -State $State -Key 'deep_safeguard_available' -Default $false)
-            type = [string](Get-StateContextValue -State $State -Key 'deep_safeguard_type' -Default '')
-            status = [string](Get-StateContextValue -State $State -Key 'deep_safeguard_status' -Default '')
-            reason = [string](Get-StateContextValue -State $State -Key 'deep_safeguard_reason' -Default '')
+            available = $safe.SafeguardAvailable
+            type = $safe.SafeguardType
+            status = $safe.SafeguardStatus
+            reason = $safe.SafeguardReason
         }
-        sourceValidationPassed = [bool](Get-StateContextValue -State $State -Key 'deep_source_valid' -Default $false)
-        safeToReboot = -not [bool](Get-StateContextValue -State $State -Key 'pending_reboot' -Default $false)
-        finalConfidence = [string]$rootCause.confidence
-        deepRecovery = $deepRecovery
+        sourceValidationPassed = $safe.SourceValidationPassed
+        safeToReboot = -not $safe.PendingReboot
+        finalConfidence = Normalize-ToString -Value (Get-ObjectValue -Object $rootCause -Name 'confidence' -Default 'low')
+        deepRecovery = $safe.DeepRecovery
     }
 
-    $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $jsonPath -Encoding UTF8
+    try {
+        $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $jsonPath -Encoding UTF8
+    } catch {
+        $fallback = [pscustomobject]@{
+            mode = $safe.Mode
+            effectiveMode = $safe.EffectiveMode
+            reportExported = $false
+            exportError = Normalize-ToString -Value $_.Exception.Message
+            stages = @()
+            steps = @()
+        }
+        $fallback | ConvertTo-Json -Depth 5 | Set-Content -Path $jsonPath -Encoding UTF8
+    }
 
     $lines = @(
         '# Windows Fix Toolkit Report',
         '',
-        "- Mode: $($State.Mode)",
-        "- EffectiveMode: $($State.EffectiveMode)",
-        "- IsAdmin: $($State.IsAdmin)",
-        "- StartedAt: $($State.StartedAt)",
+        "- Mode: $($safe.Mode)",
+        "- EffectiveMode: $($safe.EffectiveMode)",
+        "- IsAdmin: $($safe.IsAdmin)",
+        "- StartedAt: $($safe.StartedAt)",
         "- RepairRan: $($payload.repairRan)",
         "- OverallPipelineStatus: $($payload.overallPipelineStatus)",
         '',
         '## Stages'
     )
-    foreach ($st in $State.Stages) {
-        $lines += "- **[$($st.stage_id)] $($st.stage_name)**: $($st.status) (exit=$($st.exit_code), $($st.duration_ms)ms)"
-        foreach ($f in $st.findings) { $lines += "  - $f" }
-        foreach ($r in $st.recommendations) { $lines += "  - Recommendation: $r" }
-        foreach ($a in $st.artifacts) { $lines += "  - Artifact: $a" }
+
+    foreach ($st in $safe.Stages) {
+        $stageId = Normalize-ToString -Value (Get-ObjectValue -Object $st -Name 'stage_id' -Default '?')
+        $stageName = Normalize-ToString -Value (Get-ObjectValue -Object $st -Name 'stage_name' -Default 'Unknown stage')
+        $stageStatus = Normalize-ToString -Value (Get-ObjectValue -Object $st -Name 'status' -Default 'UNKNOWN')
+        $stageExit = Normalize-ToString -Value (Get-ObjectValue -Object $st -Name 'exit_code' -Default '')
+        $stageDuration = Normalize-ToString -Value (Get-ObjectValue -Object $st -Name 'duration_ms' -Default '')
+        $lines += "- **[$stageId] $stageName**: $stageStatus (exit=$stageExit, ${stageDuration}ms)"
+
+        foreach ($f in (Normalize-ToArray -Value (Get-ObjectValue -Object $st -Name 'findings' -Default @()))) { $lines += "  - $(Normalize-ToString -Value $f)" }
+        foreach ($r in (Normalize-ToArray -Value (Get-ObjectValue -Object $st -Name 'recommendations' -Default @()))) { $lines += "  - Recommendation: $(Normalize-ToString -Value $r)" }
+        foreach ($a in (Normalize-ToArray -Value (Get-ObjectValue -Object $st -Name 'artifacts' -Default @()))) { $lines += "  - Artifact: $(Normalize-ToString -Value $a)" }
     }
 
-    if ($payload.normalizedEvents.Count -gt 0) {
+    if ((Normalize-ToArray -Value $payload.normalizedEvents).Count -gt 0) {
         $lines += ''
         $lines += '## Normalized events (sample)'
-        foreach ($ev in ($payload.normalizedEvents | Select-Object -First 20)) {
-            $lines += "- [$($ev.stage)] $($ev.tool) $($ev.severity) $($ev.signature): $($ev.hint)"
+        foreach ($ev in ((Normalize-ToArray -Value $payload.normalizedEvents) | Select-Object -First 20)) {
+            $lines += "- [$(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'stage' -Default ''))] $(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'tool' -Default '')) $(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'severity' -Default '')) $(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'signature' -Default '')): $(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'hint' -Default ''))"
         }
     }
 
     $lines += ''
     $lines += '## Post-run diagnosis summary'
-    $lines += "- Root cause: $($payload.rootCauseSummary.rootCause)"
-    $lines += "- Affected stage: $($payload.rootCauseSummary.affectedStage)"
-    $lines += "- System state: $($payload.rootCauseSummary.systemState)"
-    $lines += "- Confidence: $($payload.rootCauseSummary.confidence)"
-    $lines += "- Recommended fix: $($payload.rootCauseSummary.recommendedFix)"
-    $lines += "- Safeguard: available=$($payload.safeguard.available), type=$($payload.safeguard.type), status=$($payload.safeguard.status), reason=$($payload.safeguard.reason)"
-    $lines += "- Source validation passed: $($payload.sourceValidationPassed)"
-    $lines += "- Safe to reboot: $($payload.safeToReboot)"
-    $lines += "- Final confidence: $($payload.finalConfidence)"
+    $lines += "- Root cause: $(Normalize-ToString -Value (Get-ObjectValue -Object $payload.rootCauseSummary -Name 'rootCause' -Default 'unknown'))"
+    $lines += "- Affected stage: $(Normalize-ToString -Value (Get-ObjectValue -Object $payload.rootCauseSummary -Name 'affectedStage' -Default 'unknown'))"
+    $lines += "- System state: $(Normalize-ToString -Value (Get-ObjectValue -Object $payload.rootCauseSummary -Name 'systemState' -Default 'unknown'))"
+    $lines += "- Confidence: $(Normalize-ToString -Value (Get-ObjectValue -Object $payload.rootCauseSummary -Name 'confidence' -Default 'low'))"
+    $lines += "- Recommended fix: $(Normalize-ToString -Value (Get-ObjectValue -Object $payload.rootCauseSummary -Name 'recommendedFix' -Default 'Review toolkit.log and report.md'))"
+    $lines += "- Safeguard: available=$(Normalize-ToString -Value $payload.safeguard.available), type=$(Normalize-ToString -Value $payload.safeguard.type), status=$(Normalize-ToString -Value $payload.safeguard.status), reason=$(Normalize-ToString -Value $payload.safeguard.reason)"
+    $lines += "- Source validation passed: $(Normalize-ToString -Value $payload.sourceValidationPassed)"
+    $lines += "- Safe to reboot: $(Normalize-ToString -Value $payload.safeToReboot)"
+    $lines += "- Final confidence: $(Normalize-ToString -Value $payload.finalConfidence)"
 
-    if ($payload.policyDecisions.Count -gt 0) {
+    if ((Normalize-ToArray -Value $payload.policyDecisions).Count -gt 0) {
         $lines += ''
         $lines += '## Policy decisions (sample)'
-        foreach ($pd in ($payload.policyDecisions | Select-Object -First 20)) {
-            $lines += "- [$($pd.stage)] $($pd.decision): $($pd.reason)"
+        foreach ($pd in ((Normalize-ToArray -Value $payload.policyDecisions) | Select-Object -First 20)) {
+            $lines += "- [$(Normalize-ToString -Value (Get-ObjectValue -Object $pd -Name 'stage' -Default ''))] $(Normalize-ToString -Value (Get-ObjectValue -Object $pd -Name 'decision' -Default '')): $(Normalize-ToString -Value (Get-ObjectValue -Object $pd -Name 'reason' -Default ''))"
         }
     }
 
     if ($payload.deepRecovery) {
+        $dr = $payload.deepRecovery
         $lines += ''
         $lines += '## Deep Recovery (step report)'
-        $lines += "- MachineProfile: family=$($payload.deepRecovery.machineProfile.family), edition=$($payload.deepRecovery.machineProfile.edition), arch=$($payload.deepRecovery.machineProfile.architecture), build=$($payload.deepRecovery.machineProfile.build), lang=$($payload.deepRecovery.machineProfile.uiLanguage)"
-        $lines += "- PreflightSummary: classification=$($payload.deepRecovery.preflightResult.classification), pendingReboot=$($payload.deepRecovery.preflightResult.pendingReboot), online=$($payload.deepRecovery.preflightResult.internetConnectivity)"
-        $lines += "- OverallStatus: $($payload.deepRecovery.overallStatus)"
-        $lines += "- PreflightClassification: $($payload.deepRecovery.preflightResult.classification)"
-        $lines += "- SafeguardCheckClassification: $($payload.deepRecovery.safeguardCheckResult.classification)"
-        $lines += "- SafeguardResultClassification: $($payload.deepRecovery.safeguardResult.classification)"
-        $lines += "- RequiresStrongAck: $($payload.deepRecovery.requiresStrongAck)"
-        $lines += "- SourceDiscovery: candidates=$(@($payload.deepRecovery.sourceDiscoveryResult.candidates).Count), selected=$($payload.deepRecovery.sourceDiscoveryResult.selected.path)"
-        $lines += "- SourceValidation: $($payload.deepRecovery.sourceValidationResult.validation)"
-        $lines += "- DISM: outcome=$($payload.deepRecovery.dismResult.outcome), class=$($payload.deepRecovery.dismResult.classification)"
-        $lines += "- SFC: outcome=$($payload.deepRecovery.sfcResult.outcome), class=$($payload.deepRecovery.sfcResult.classification)"
-        $lines += "- Postcheck: $($payload.deepRecovery.postcheckResult.classification), rebootRecommended=$($payload.deepRecovery.postcheckResult.rebootRecommended)"
-        $lines += "- EscalationDecision: $($payload.deepRecovery.escalationDecisionResult.decision), risk=$($payload.deepRecovery.escalationDecisionResult.risk)"
-        $lines += "- ReinstallPath: recommended=$($payload.deepRecovery.reinstallPathResult.recommended), invoked=$($payload.deepRecovery.reinstallPathResult.invoked), win11Path=$($payload.deepRecovery.reinstallPathResult.windows11SupportedReinstallPath), acknowledgementRequired=$($payload.deepRecovery.reinstallPathResult.acknowledgementRequired)"
-        $lines += "- FinalConfidence: $($payload.deepRecovery.confidence)"
-        $lines += "- HumanSummary: $($payload.deepRecovery.finalSummary)"
+        $lines += "- MachineProfile: family=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('machineProfile','family') -Default '')), edition=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('machineProfile','edition') -Default '')), arch=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('machineProfile','architecture') -Default '')), build=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('machineProfile','build') -Default '')), lang=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('machineProfile','uiLanguage') -Default ''))"
+        $lines += "- PreflightSummary: classification=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('preflightResult','classification') -Default '')), pendingReboot=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('preflightResult','pendingReboot') -Default '')), online=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('preflightResult','internetConnectivity') -Default ''))"
+        $lines += "- OverallStatus: $(Normalize-ToString -Value (Get-ObjectValue -Object $dr -Name 'overallStatus' -Default ''))"
+        $lines += "- PreflightClassification: $(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('preflightResult','classification') -Default ''))"
+        $lines += "- SafeguardCheckClassification: $(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('safeguardCheckResult','classification') -Default ''))"
+        $lines += "- SafeguardResultClassification: $(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('safeguardResult','classification') -Default ''))"
+        $lines += "- RequiresStrongAck: $(Normalize-ToString -Value (Get-ObjectValue -Object $dr -Name 'requiresStrongAck' -Default ''))"
+        $lines += "- SourceDiscovery: candidates=$((Normalize-ToArray -Value (Get-NestedObjectValue -Object $dr -Path @('sourceDiscoveryResult','candidates') -Default @())).Count), selected=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('sourceDiscoveryResult','selected','path') -Default ''))"
+        $lines += "- SourceValidation: $(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('sourceValidationResult','validation') -Default ''))"
+        $lines += "- DISM: outcome=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('dismResult','outcome') -Default '')), class=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('dismResult','classification') -Default ''))"
+        $lines += "- SFC: outcome=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('sfcResult','outcome') -Default '')), class=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('sfcResult','classification') -Default ''))"
+        $lines += "- Postcheck: $(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('postcheckResult','classification') -Default '')), rebootRecommended=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('postcheckResult','rebootRecommended') -Default ''))"
+        $lines += "- EscalationDecision: $(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('escalationDecisionResult','decision') -Default '')), risk=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('escalationDecisionResult','risk') -Default ''))"
+        $lines += "- ReinstallPath: recommended=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('reinstallPathResult','recommended') -Default '')), invoked=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('reinstallPathResult','invoked') -Default '')), win11Path=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('reinstallPathResult','windows11SupportedReinstallPath') -Default '')), acknowledgementRequired=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('reinstallPathResult','acknowledgementRequired') -Default ''))"
+        $lines += "- FinalConfidence: $(Normalize-ToString -Value (Get-ObjectValue -Object $dr -Name 'confidence' -Default ''))"
+        $lines += "- HumanSummary: $(Normalize-ToString -Value (Get-ObjectValue -Object $dr -Name 'finalSummary' -Default ''))"
     }
 
     Set-Content -Path $mdPath -Value $lines -Encoding UTF8
