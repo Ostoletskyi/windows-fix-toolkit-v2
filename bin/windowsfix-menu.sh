@@ -48,11 +48,22 @@ warn_red() {
 ' "$1"; else echo "$1"; fi
 }
 
+normalize_gate_input() {
+  local raw="$1"
+  # Normalize CRLF artifacts from mixed terminals and trim surrounding spaces.
+  raw="${raw//$'\r'/}"
+  raw="${raw//$'\n'/}"
+  raw="$(printf '%s' "$raw" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  printf '%s' "$raw"
+}
+
 deep_recovery_confirm() {
   warn_yellow "[WARNING] Deep Recovery (Official Microsoft Source) may modify servicing components and requires trusted source validation."
   warn_yellow "[WARNING] Use only on severely damaged systems where standard Repair is insufficient."
   read -r -p "Proceed to second confirmation? Type YES to continue: " first_gate
-  if [[ "$first_gate" != "YES" ]]; then
+  local first_gate_norm
+  first_gate_norm="$(normalize_gate_input "$first_gate" | tr '[:lower:]' '[:upper:]')"
+  if [[ "$first_gate_norm" != "YES" ]]; then
     echo "[INFO] Deep Recovery cancelled at first confirmation gate."
     return 1
   fi
@@ -60,8 +71,12 @@ deep_recovery_confirm() {
   warn_red "[DANGER] High-risk mode for third-party machines. If rollback safeguard is unavailable, risk increases."
   warn_red "[DANGER] Type exactly: I UNDERSTAND THIS MAY CHANGE SYSTEM COMPONENTS"
   local expected="I UNDERSTAND THIS MAY CHANGE SYSTEM COMPONENTS"
+  local expected_norm
+  expected_norm="$(normalize_gate_input "$expected" | tr '[:lower:]' '[:upper:]')"
   read -r -p "> " second_gate
-  if [[ "$second_gate" != "$expected" ]]; then
+  local second_gate_norm
+  second_gate_norm="$(normalize_gate_input "$second_gate" | tr '[:lower:]' '[:upper:]')"
+  if [[ "$second_gate_norm" != "$expected_norm" ]]; then
     echo "[INFO] Deep Recovery cancelled: explicit acknowledgement mismatch."
     return 1
   fi
