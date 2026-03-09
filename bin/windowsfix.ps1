@@ -22,18 +22,35 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Split-Path -Parent $scriptDir
-$modulePath = Join-Path $repoRoot 'src\WindowsFixToolkit.psm1'
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$pathsHelper = Join-Path $scriptDir '..\src\internal\paths.ps1'
+if (-not (Test-Path -LiteralPath $pathsHelper)) {
+    Write-Error "Toolkit path helper not found: $pathsHelper"
+    exit 10
+}
 
-if (-not (Test-Path $modulePath)) {
+. $pathsHelper
+
+try {
+    $repoRoot = Get-ToolkitRoot -StartPath $scriptDir
+} catch {
+    Write-Error $_.Exception.Message
+    exit 10
+}
+
+$layout = Test-ToolkitLayout -ToolkitRoot $repoRoot
+if (-not $layout.IsValid) {
+    Write-Error ("Toolkit layout is invalid. Missing: {0}" -f (($layout.Missing | ForEach-Object { [string]$_ }) -join ', '))
+    exit 10
+}
+
+$modulePath = Get-ToolkitPath -Root $repoRoot -RelativePath 'src\WindowsFixToolkit.psm1'
+if (-not (Test-Path -LiteralPath $modulePath)) {
     Write-Error "Toolkit module not found: $modulePath"
     exit 10
 }
 
-$ts = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
-if (-not $ReportPath) { $ReportPath = Join-Path $repoRoot "Outputs\WindowsFix_$ts" }
-New-Item -ItemType Directory -Path $ReportPath -Force | Out-Null
+$ReportPath = New-ToolkitRuntimePath -ToolkitRoot $repoRoot -ReportPath $ReportPath -Prefix 'WindowsFix'
 if (-not $LogPath) { $LogPath = Join-Path $ReportPath 'toolkit.log' }
 if (-not $TranscriptPath) { $TranscriptPath = Join-Path $ReportPath 'transcript.log' }
 
@@ -42,6 +59,7 @@ Import-Module $modulePath -Force
 $meta = @(
     "SCRIPT_BUILD    : WindowsFixToolkit-PS v2.0.0",
     "Mode            : $Mode",
+    "ToolkitRoot     : $repoRoot",
     "ReportPath      : $ReportPath",
     "ToolkitLogPath  : $LogPath"
 )

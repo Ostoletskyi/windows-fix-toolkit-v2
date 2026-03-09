@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 . $PSScriptRoot/internal/logging.ps1
 . $PSScriptRoot/internal/process.ps1
 . $PSScriptRoot/internal/checks.ps1
+. $PSScriptRoot/internal/paths.ps1
 . $PSScriptRoot/deeprecovery/schemas.ps1
 . $PSScriptRoot/deeprecovery/preflight.ps1
 . $PSScriptRoot/deeprecovery/safeguard.ps1
