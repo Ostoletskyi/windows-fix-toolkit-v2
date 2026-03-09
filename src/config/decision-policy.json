@@ -1,0 +1,65 @@
+{
+  "DISM_SOURCE_MISSING": {
+    "severity": "error",
+    "category": "system",
+    "action": "fallback_or_abort",
+    "retry_allowed": false,
+    "requires_source": true
+  },
+  "POWERSHELL_ARGUMENTLIST_NULL": {
+    "severity": "fatal",
+    "category": "internal",
+    "action": "abort_pipeline",
+    "retry_allowed": false,
+    "requires_code_fix": true
+  },
+  "EXIT_CODE_NOT_CAPTURED": {
+    "severity": "warning",
+    "category": "internal",
+    "action": "retry",
+    "retry_allowed": true,
+    "requires_code_fix": true
+  },
+  "ACCESS_DENIED": {
+    "severity": "error",
+    "category": "permissions",
+    "action": "relaunch_elevated_or_unlock",
+    "retry_allowed": true,
+    "requires_code_fix": false
+  },
+  "SOURCE_INDEX_MISMATCH": {
+    "severity": "error",
+    "category": "source",
+    "action": "abort_pipeline",
+    "retry_allowed": false,
+    "requires_matching_media": true
+  },
+  "WINRE_REQUIRED": {
+    "severity": "warning",
+    "category": "environment",
+    "action": "fallback_or_abort",
+    "retry_allowed": false,
+    "requires_winre": true
+  },
+  "RESTORE_POLICY_DISABLED": {
+    "severity": "warning",
+    "category": "environment",
+    "action": "require_strong_ack_or_abort",
+    "retry_allowed": false,
+    "policy_managed": true
+  },
+  "VSS_DEPENDENCY_PROBLEM": {
+    "severity": "warning",
+    "category": "environment",
+    "action": "continue_with_strong_ack",
+    "retry_allowed": false,
+    "requires_vss_repair": true
+  },
+  "SERVER_NO_SYSTEMSTATE_TARGET": {
+    "severity": "warning",
+    "category": "environment",
+    "action": "continue_with_strong_ack",
+    "retry_allowed": false,
+    "requires_backup_target": true
+  }
+}
