@@ -17,7 +17,7 @@ function Invoke-DeepRecoverySfcPhase {
     }
 
     try {
-        $cmd = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
+        $cmd = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
         $class = Get-DeepRecoveryExecutionClassification -Result $cmd -Tool 'sfc'
 
         $result.command = $cmd.CommandLine

@@ -794,7 +794,7 @@ function Run-StageComponentStoreRepair {
         $stage.actions.Add([pscustomobject]@{ name='DISM RestoreHealth'; status='SKIPPED'; reason='RepairProfile=Quick'; exit_code=0; duration_ms=0; timed_out=$false; commandLine='dism.exe /Online /Cleanup-Image /RestoreHealth'; stdout=''; stderr='' })
         $stage.recommendations.Add('Quick profile skips ScanHealth/RestoreHealth for faster run. Use RepairProfile=Normal or Deep for full servicing repair.')
     } else {
-        $scan = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/ScanHealth') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
+        $scan = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/ScanHealth') -TimeoutSec 3600 -HeartbeatSec 20 -State $State -IgnoreExitCode
         Add-ActionResult -State $State -Stage $stage -Name 'DISM ScanHealth' -Result $scan -InterpretedStatus ($(if(-not $scan.ExitCodeCaptured){'WARN'}elseif($scan.ExitCode -eq 0){'OK'}else{'FAIL'}))
 
         $needRestore = $true
@@ -804,7 +804,7 @@ function Run-StageComponentStoreRepair {
         }
 
         if ($needRestore) {
-            $restore = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
+            $restore = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList @('/Online','/Cleanup-Image','/RestoreHealth') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
             Add-ActionResult -State $State -Stage $stage -Name 'DISM RestoreHealth' -Result $restore -InterpretedStatus ($(if(-not $restore.ExitCodeCaptured){'WARN'}elseif($restore.ExitCode -eq 0){'OK'}else{'FAIL'}))
         }
     }
@@ -842,7 +842,7 @@ function Run-StageSystemFileRepair {
     }
 
     Write-Host '[WORK] Running SFC scan in a separate console window...'
-    $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
+    $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
     $normalized = 'WARN'
     if (-not $sfc.ExitCodeCaptured) { $normalized = 'WARN'; $stage.recommendations.Add('SFC exit code was not captured reliably; verify via CBS.log and rerun if needed.') }
     elseif ($sfc.StdOut -match 'did not find any integrity violations') { $normalized = 'OK' }
@@ -1186,10 +1186,10 @@ function Run-StageDeepRecoveryExecution {
         $args += @('/Source:' + [string]$State.Context['deep_validated_source'], '/LimitAccess')
     }
 
-    $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList $args -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
+    $dism = Invoke-ExternalCommand -FilePath 'dism.exe' -ArgumentList $args -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
     Add-ActionResult -State $State -Stage $stage -Name 'DISM RestoreHealth (official source)' -Result $dism -InterpretedStatus ($(if($dism.ExitCodeCaptured -and $dism.ExitCode -eq 0){'OK'}elseif(-not $dism.ExitCodeCaptured){'WARN'}else{'FAIL'}))
 
-    $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode -ForceCaptured
+    $sfc = Invoke-ExternalCommand -FilePath 'sfc.exe' -ArgumentList @('/scannow') -TimeoutSec 7200 -HeartbeatSec 20 -State $State -IgnoreExitCode
     Add-ActionResult -State $State -Stage $stage -Name 'SFC /scannow post-DISM' -Result $sfc -InterpretedStatus ($(if($sfc.ExitCodeCaptured -and $sfc.ExitCode -eq 0){'OK'}elseif(-not $sfc.ExitCodeCaptured){'WARN'}else{'FAIL'}))
 
     $hasFail = @($stage.actions | Where-Object { $_.status -eq 'FAIL' }).Count -gt 0
