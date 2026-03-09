@@ -1430,10 +1430,13 @@ function Export-ToolkitReport {
         foreach ($a in (Normalize-ToArray -Value (Get-ObjectValue -Object $st -Name 'artifacts' -Default @()))) { $lines += "  - Artifact: $(Normalize-ToString -Value $a)" }
     }
 
-    if ((Normalize-ToArray -Value $payload.normalizedEvents).Count -gt 0) {
+    # Normalize into an array variable first. Without @(...), PowerShell may unwrap
+    # single-item outputs into scalars that do not have .Count.
+    $normalizedEventsArr = @(Normalize-ToArray -Value $payload.normalizedEvents)
+    if ($normalizedEventsArr.Count -gt 0) {
         $lines += ''
         $lines += '## Normalized events (sample)'
-        foreach ($ev in ((Normalize-ToArray -Value $payload.normalizedEvents) | Select-Object -First 20)) {
+        foreach ($ev in ($normalizedEventsArr | Select-Object -First 20)) {
             $lines += "- [$(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'stage' -Default ''))] $(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'tool' -Default '')) $(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'severity' -Default '')) $(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'signature' -Default '')): $(Normalize-ToString -Value (Get-ObjectValue -Object $ev -Name 'hint' -Default ''))"
         }
     }
@@ -1450,10 +1453,11 @@ function Export-ToolkitReport {
     $lines += "- Safe to reboot: $(Normalize-ToString -Value $payload.safeToReboot)"
     $lines += "- Final confidence: $(Normalize-ToString -Value $payload.finalConfidence)"
 
-    if ((Normalize-ToArray -Value $payload.policyDecisions).Count -gt 0) {
+    $policyDecisionsArr = @(Normalize-ToArray -Value $payload.policyDecisions)
+    if ($policyDecisionsArr.Count -gt 0) {
         $lines += ''
         $lines += '## Policy decisions (sample)'
-        foreach ($pd in ((Normalize-ToArray -Value $payload.policyDecisions) | Select-Object -First 20)) {
+        foreach ($pd in ($policyDecisionsArr | Select-Object -First 20)) {
             $lines += "- [$(Normalize-ToString -Value (Get-ObjectValue -Object $pd -Name 'stage' -Default ''))] $(Normalize-ToString -Value (Get-ObjectValue -Object $pd -Name 'decision' -Default '')): $(Normalize-ToString -Value (Get-ObjectValue -Object $pd -Name 'reason' -Default ''))"
         }
     }
@@ -1469,7 +1473,8 @@ function Export-ToolkitReport {
         $lines += "- SafeguardCheckClassification: $(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('safeguardCheckResult','classification') -Default ''))"
         $lines += "- SafeguardResultClassification: $(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('safeguardResult','classification') -Default ''))"
         $lines += "- RequiresStrongAck: $(Normalize-ToString -Value (Get-ObjectValue -Object $dr -Name 'requiresStrongAck' -Default ''))"
-        $lines += "- SourceDiscovery: candidates=$((Normalize-ToArray -Value (Get-NestedObjectValue -Object $dr -Path @('sourceDiscoveryResult','candidates') -Default @())).Count), selected=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('sourceDiscoveryResult','selected','path') -Default ''))"
+        $drCandidates = @(Normalize-ToArray -Value (Get-NestedObjectValue -Object $dr -Path @('sourceDiscoveryResult','candidates') -Default @()))
+        $lines += "- SourceDiscovery: candidates=$($drCandidates.Count), selected=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('sourceDiscoveryResult','selected','path') -Default ''))"
         $lines += "- SourceValidation: $(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('sourceValidationResult','validation') -Default ''))"
         $lines += "- DISM: outcome=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('dismResult','outcome') -Default '')), class=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('dismResult','classification') -Default ''))"
         $lines += "- SFC: outcome=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('sfcResult','outcome') -Default '')), class=$(Normalize-ToString -Value (Get-NestedObjectValue -Object $dr -Path @('sfcResult','classification') -Default ''))"
